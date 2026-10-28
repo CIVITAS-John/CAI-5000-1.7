@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.Assertions;
 using System.Reflection;
+using System.Linq.Expressions;
 using CombatAI.Compatibility;
 using Verse;
 using RimWorld;
@@ -22,6 +23,14 @@ namespace CombatAI
 	public class MapComponent_FogGrid : MapComponent
 	{
 		private const int SECTION_SIZE = 16;
+		private readonly int mapSizeX, mapSizeZ;
+		private readonly object fogLock = new object();
+		private readonly HashSet<int> pendingChanges = new HashSet<int>();
+		private readonly HashSet<IntVec2> dirtyNativeSections = new HashSet<IntVec2>();
+		private bool floodUnfogPending;
+		private int indoorRevision = 1, rebuiltIndoorRevision;
+		private bool previousIndoorVisible;
+		private bool previousIndoorHome;
 
 		private static readonly Texture2D fogTex;
 		private static readonly Mesh      mesh;
@@ -42,10 +51,7 @@ namespace CombatAI
 		private byte _fogSaveVersion;
 		private const byte FOG_SAVE_VERSION = 1;
 
-		private FieldInfo    _cachedFogGridField;
-		private object       _cachedNativeFog;
-		private MethodInfo   _cachedNativeFogSet;
-		private PropertyInfo _cachedNativeFogIndexer;
+		private Action<int, bool> _nativeFogWriter;
 		private bool   initialized;
 		private bool   previousFogEnabled;
 		private bool   previousUseVanillaUnexplored;
@@ -56,7 +62,7 @@ namespace CombatAI
 		public           SightGrid sight;
 		private volatile int       ticksGame;
 		private volatile float     tickRateMultiplier;
-		private          int       updateNum;
+
 		private volatile int       screenMinU;
 		private volatile int       screenMinV;
 		private volatile int       screenMaxU;
@@ -66,10 +72,9 @@ namespace CombatAI
 		public           WallGrid  walls;
 
 		private volatile bool      _cachedIsPlayerHome;
-		private volatile bool[]    _indoorRoomCache; 
-		private volatile bool[]    _indoorProtectCache; 
-		private          int       _indoorCacheLastTick = -9999;
-		private const int          INDOOR_CACHE_REBUILD_INTERVAL = 120;
+		private volatile bool[]    _indoorRoomCache;
+		private volatile bool[]    _indoorProtectCache;
+
 		private          bool[]    _indoorCacheBuffer;
 		private          bool[]    _indoorExpandBuffer;
 		private          bool[]    _indoorProtectBuffer;
@@ -92,9 +97,11 @@ namespace CombatAI
 			spotBuffer   = new List<Vector3>(256);
 			asyncActions = new AsyncActions();
 			cellIndices  = map.cellIndices;
-			mapRect      = new Rect(0, 0, CellIndicesCompat.GetMapSizeX(cellIndices), CellIndicesCompat.GetMapSizeZ(cellIndices));
+			mapSizeX = map.Size.x;
+			mapSizeZ = map.Size.z;
+			mapRect      = new Rect(0, 0, mapSizeX, mapSizeZ);
 			fogState     = new CellFogState[map.cellIndices.NumGridCells];
-			grid2d       = new ISection[Mathf.CeilToInt(CellIndicesCompat.GetMapSizeX(cellIndices) / (float)SECTION_SIZE)][];
+			grid2d       = new ISection[Mathf.CeilToInt(mapSizeX / (float)SECTION_SIZE)][];
 		}
 
 		internal static bool IsGravshipLandingSelectionActive
@@ -218,113 +225,129 @@ namespace CombatAI
 
 		internal void ClearCAIFogBitsForSave()
 		{
-			if (map?.fogGrid == null) return;
-			for (int i = 0; i < fogState.Length; i++)
+			lock (fogLock)
 			{
-				if (fogState[i] == CellFogState.CAIFogged)
-					WriteNativeFogBit(i, false);
+				if (map?.fogGrid == null) return;
+				for (int i = 0; i < fogState.Length; i++)
+				{
+					if (fogState[i] == CellFogState.CAIFogged)
+						WriteNativeFogBit(i, false);
+				}
 			}
 		}
 
 		internal void RestoreCAIFogBitsAfterSave()
 		{
-			if (!EffectiveUseVanillaUnexplored) return;
-			if (map?.fogGrid == null) return;
-			for (int i = 0; i < fogState.Length; i++)
+			lock (fogLock)
 			{
-				if (fogState[i] == CellFogState.CAIFogged)
-					WriteNativeFogBit(i, true);
-			}
-		}
-
-		public void RestoreAllAppliedWarFog()
-		{
-			try
-			{
-				int cleared = 0;
-				for (int i = 0; i < fogState.Length; i++)
-				{
-					if (fogState[i] == CellFogState.CAIFogged)
-					{
-						WriteNativeFogBit(i, false);
-						fogState[i] = CellFogState.VanillaExplored;
-						cleared++;
-					}
-				}
-				for (int u = 0; u < grid2d.Length; u++)
-				{
-					if (grid2d[u] == null) continue;
-					for (int v = 0; v < grid2d[u].Length; v++)
-					{
-						var sec = grid2d[u][v];
-						if (sec != null)
-						{
-							sec.dirty = true;
-							for (int ci = 0; ci < sec.cells.Length; ci++) sec.cells[ci] = 0f;
-						}
-					}
-				}
-				if (map?.mapDrawer != null)
-				{
-					foreach (var cell in map.AllCells)
-						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-				}
-				if (Finder.Settings.Debug)
-					Log.Message($"MapComponent_FogGrid: restored {cleared} CAIFogged cells for map {map}");
-			}
-			catch (Exception e)
-			{
-				Log.Error($"MapComponent_FogGrid: error in RestoreAllAppliedWarFog for map {map}: {e}");
-			}
-		}
-
-		public void RecomputeOnceMainThread()
-		{
-			if (!SightUtility.SupportsMap(map)) return;
-			if (!ready)
-			{
-				sight = map.GetComp_Fast<SightTracker>()?.colonistsAndFriendlies;
-				walls = map.GetComp_Fast<WallGrid>();
-				glow  = map.glowGrid;
-				ready = sight != null;
-			}
-			if (!ready) return;
-			if (grid2d == null) return;
-			for (int u = 0; u < grid2d.Length; u++)
-			{
-				var inner = grid2d[u];
-				if (inner == null) continue;
-				for (int v = 0; v < inner.Length; v++)
-				{
-					var sec = inner[v];
-					if (sec == null) continue;
-					sec.Update(true);
-					sec.ApplyFogged();
-				}
-			}
-			// ensure any queued main-thread actions run
-			asyncActions.ExecuteMainThreadActions();
-		}
-
-		public void ApplyVanillaUnexploredOverlay()
-		{
-			if (!SightUtility.SupportsMap(map)) return;
-			try
-			{
-				InitializeFogStateFromVanilla();
+				if (!EffectiveUseVanillaUnexplored) return;
+				if (map?.fogGrid == null) return;
 				for (int i = 0; i < fogState.Length; i++)
 				{
 					if (fogState[i] == CellFogState.CAIFogged)
 						WriteNativeFogBit(i, true);
 				}
-				foreach (var c in map.AllCells)
-					map.mapDrawer.MapMeshDirty(c, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-				if (Finder.Settings.Debug)
-					Log.Message($"MapComponent_FogGrid: Applied DeepWarFog visual overlay for map {map}");
 			}
-			catch (Exception e)
+		}
+
+		public void RestoreAllAppliedWarFog()
+		{
+			lock (fogLock)
 			{
-				Log.Error($"MapComponent_FogGrid: error while applying DeepWarFog visual overlay for map {map}: {e}");
+				try
+				{
+					int cleared = 0;
+					for (int i = 0; i < fogState.Length; i++)
+					{
+						if (fogState[i] == CellFogState.CAIFogged)
+						{
+							WriteNativeFogBit(i, false);
+							fogState[i] = CellFogState.VanillaExplored;
+							cleared++;
+						}
+					}
+					for (int u = 0; u < grid2d.Length; u++)
+					{
+						if (grid2d[u] == null) continue;
+						for (int v = 0; v < grid2d[u].Length; v++)
+						{
+							var sec = grid2d[u][v];
+							if (sec != null)
+							{
+								sec.dirty = true;
+								for (int ci = 0; ci < sec.cells.Length; ci++) sec.cells[ci] = 0f;
+							}
+						}
+					}
+					if (map?.mapDrawer != null)
+					{
+						foreach (var cell in map.AllCells)
+							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					}
+					if (Finder.Settings.Debug)
+						Log.Message($"MapComponent_FogGrid: restored {cleared} CAIFogged cells for map {map}");
+				}
+				catch (Exception e)
+				{
+					Log.Error($"MapComponent_FogGrid: error in RestoreAllAppliedWarFog for map {map}: {e}");
+				}
+			}
+		}
+
+		public void RecomputeOnceMainThread()
+		{
+			lock (fogLock)
+			{
+				if (!SightUtility.SupportsMap(map)) return;
+				if (!ready)
+				{
+					sight = map.GetComp_Fast<SightTracker>()?.colonistsAndFriendlies;
+					walls = map.GetComp_Fast<WallGrid>();
+					glow  = map.glowGrid;
+					ready = sight != null;
+				}
+				if (!ready) return;
+				if (grid2d == null) return;
+				for (int u = 0; u < grid2d.Length; u++)
+				{
+					var inner = grid2d[u];
+					if (inner == null) continue;
+					for (int v = 0; v < inner.Length; v++)
+					{
+						var sec = inner[v];
+						if (sec == null) continue;
+						sec.Update();
+						sec.ApplyFogged();
+					}
+				}
+				// ensure any queued main-thread actions run
+				asyncActions.ExecuteMainThreadActions();
+				FlushFogChanges();
+			}
+		}
+
+		public void ApplyVanillaUnexploredOverlay()
+		{
+			lock (fogLock)
+			{
+				if (!SightUtility.SupportsMap(map)) return;
+				try
+				{
+					InitializeFogStateFromVanilla();
+					for (int i = 0; i < fogState.Length; i++)
+					{
+						if (fogState[i] == CellFogState.CAIFogged)
+							WriteNativeFogBit(i, true);
+					}
+					foreach (var c in map.AllCells)
+						map.mapDrawer.MapMeshDirty(c, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					if (Finder.Settings.Debug)
+						Log.Message($"MapComponent_FogGrid: Applied DeepWarFog visual overlay for map {map}");
+				}
+				catch (Exception e)
+				{
+					Log.Error($"MapComponent_FogGrid: error while applying DeepWarFog visual overlay for map {map}: {e}");
+				}
 			}
 		}
 
@@ -346,85 +369,94 @@ namespace CombatAI
 		{
 			if (!Finder.Settings.FogOfWar_Enabled) return;
 			if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome) return;
+			if (floodUnfogPending) return;
+			floodUnfogPending = true;
 			asyncActions.EnqueueMainThreadAction(() =>
 			{
-
-				Patches.FogGrid_IsFogged_Patch.PushSuppressDeepFogForVanillaChecks();
-				try
+				floodUnfogPending = false;
+				lock (fogLock)
 				{
-					InitializeFogStateFromVanilla();
-				}
-				finally
-				{
-					Patches.FogGrid_IsFogged_Patch.PopSuppressDeepFogForVanillaChecks();
-				}
-				if (EffectiveUseVanillaUnexplored)
-				{
-					for (int i = 0; i < fogState.Length; i++)
+					Patches.FogGrid_IsFogged_Patch.PushSuppressDeepFogForVanillaChecks();
+					try
 					{
-						if (fogState[i] == CellFogState.CAIFogged)
-							WriteNativeFogBit(i, true);
+						InitializeFogStateFromVanilla();
 					}
-				}
-				if (map?.mapDrawer != null)
-				{
-					foreach (var cell in map.AllCells)
-						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					finally
+					{
+						Patches.FogGrid_IsFogged_Patch.PopSuppressDeepFogForVanillaChecks();
+					}
+					if (EffectiveUseVanillaUnexplored)
+					{
+						for (int i = 0; i < fogState.Length; i++)
+						{
+							if (fogState[i] == CellFogState.CAIFogged)
+								WriteNativeFogBit(i, true);
+						}
+					}
+					if (map?.mapDrawer != null)
+					{
+						foreach (var cell in map.AllCells)
+							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					}
 				}
 			});
 		}
 
 		public void ReinitializeFogFromScratch()
 		{
-			if (!SightUtility.SupportsMap(map)) return;
-			if (map?.fogGrid == null) return;
-			try
+			lock (fogLock)
 			{
-				// Mark all cells as VanillaUnexplored and write the raw fog bits
-				for (int i = 0; i < fogState.Length; i++)
-				{
-					fogState[i] = CellFogState.VanillaUnexplored;
-					WriteNativeFogBit(i, true);
-				}
-				// FloodUnfog from every spawned player-owned pawn
-				foreach (var pawn in map.mapPawns.AllPawnsSpawned)
-				{
-					if (pawn.Faction != null && pawn.Faction.IsPlayer)
-						FloodFillerFog.FloodUnfog(pawn.Position, map);
-				}
-				// Re-read the true vanilla state (bypassing the CAI IsFogged patch)
-				Patches.FogGrid_IsFogged_Patch.PushSuppressDeepFogForVanillaChecks();
+				if (!SightUtility.SupportsMap(map)) return;
+				if (map?.fogGrid == null) return;
 				try
 				{
-					InitializeFogStateFromVanilla();
-				}
-				finally
-				{
-					Patches.FogGrid_IsFogged_Patch.PopSuppressDeepFogForVanillaChecks();
-				}
-				if (EffectiveUseVanillaUnexplored)
-				{
+					Interlocked.Increment(ref indoorRevision);
+					// Mark all cells as VanillaUnexplored and write the raw fog bits
 					for (int i = 0; i < fogState.Length; i++)
 					{
-						if (fogState[i] == CellFogState.CAIFogged)
-							WriteNativeFogBit(i, true);
+						fogState[i] = CellFogState.VanillaUnexplored;
+						WriteNativeFogBit(i, true);
 					}
+					// FloodUnfog from every spawned player-owned pawn
+					foreach (var pawn in map.mapPawns.AllPawnsSpawned)
+					{
+						if (pawn.Faction != null && pawn.Faction.IsPlayer)
+							FloodFillerFog.FloodUnfog(pawn.Position, map);
+					}
+					// Re-read the true vanilla state (bypassing the CAI IsFogged patch)
+					Patches.FogGrid_IsFogged_Patch.PushSuppressDeepFogForVanillaChecks();
+					try
+					{
+						InitializeFogStateFromVanilla();
+					}
+					finally
+					{
+						Patches.FogGrid_IsFogged_Patch.PopSuppressDeepFogForVanillaChecks();
+					}
+					if (EffectiveUseVanillaUnexplored)
+					{
+						for (int i = 0; i < fogState.Length; i++)
+						{
+							if (fogState[i] == CellFogState.CAIFogged)
+								WriteNativeFogBit(i, true);
+						}
+					}
+					if (map?.mapDrawer != null)
+					{
+						foreach (var cell in map.AllCells)
+							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					}
+					RecomputeOnceMainThread();
+					Log.Message($"MapComponent_FogGrid: ReinitializeFogFromScratch completed for map {map}");
 				}
-				if (map?.mapDrawer != null)
+				catch (Exception e)
 				{
-					foreach (var cell in map.AllCells)
-						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					Log.Error($"MapComponent_FogGrid: error in ReinitializeFogFromScratch: {e}");
 				}
-				RecomputeOnceMainThread();
-				Log.Message($"MapComponent_FogGrid: ReinitializeFogFromScratch completed for map {map}");
-			}
-			catch (Exception e)
-			{
-				Log.Error($"MapComponent_FogGrid: error in ReinitializeFogFromScratch: {e}");
 			}
 		}
 
-		public void ApplyWarFogChangeMainThread(int index)
+		public void ApplyWarFogChangeMainThread(int index, bool dirtyMesh = true)
 		{
 			if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome)
 				return;
@@ -432,7 +464,7 @@ namespace CombatAI
 			int x = index % mapSizeX;
 			int z = index / mapSizeX;
 			IntVec3 cell = new IntVec3(x, 0, z);
-			map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+			if (dirtyMesh) map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
 			if (EffectiveUseVanillaUnexplored && map?.fogGrid != null)
 			{
 				try
@@ -447,100 +479,134 @@ namespace CombatAI
 			}
 		}
 
-		private object GetOrCacheNativeFog()
-		{
-			if (_cachedNativeFog != null) return _cachedNativeFog;
-			if (map?.fogGrid == null) return null;
-			if (_cachedFogGridField == null)
-				_cachedFogGridField = typeof(FogGrid).GetField("fogGrid", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-			if (_cachedFogGridField == null) return null;
-			_cachedNativeFog = _cachedFogGridField.GetValue(map.fogGrid);
-			if (_cachedNativeFog != null)
-			{
-				var t = _cachedNativeFog.GetType();
-				_cachedNativeFogSet = t.GetMethod("Set", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new Type[] { typeof(int), typeof(bool) }, null)
-					?? t.GetMethod("Set", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new Type[] { typeof(int) }, null);
-				_cachedNativeFogIndexer = t.GetProperty("Item", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-			}
-			return _cachedNativeFog;
-		}
-
 		private void WriteNativeFogBit(int index, bool value)
 		{
-			object nativeFog = GetOrCacheNativeFog();
-			if (nativeFog == null) return;
-			try
+			if (_nativeFogWriter == null)
 			{
-				if (_cachedNativeFogSet != null)
-				{
-					var p = _cachedNativeFogSet.GetParameters();
-					if (p.Length == 2)
-						_cachedNativeFogSet.Invoke(nativeFog, new object[] { index, value });
-				}
-				else if (_cachedNativeFogIndexer != null && _cachedNativeFogIndexer.CanWrite)
-				{
-					_cachedNativeFogIndexer.SetValue(nativeFog, value, new object[] { index });
-				}
+				if (map?.fogGrid == null) return;
+				var fogField = typeof(FogGrid).GetField("fogGrid", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+				if (fogField == null) return;
+				var type = fogField.FieldType;
+				var indexArg = Expression.Parameter(typeof(int));
+				var valueArg = Expression.Parameter(typeof(bool));
+				var target = Expression.Field(Expression.Constant(map.fogGrid), fogField);
+				var setter = type.GetMethod("Set", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(int), typeof(bool) }, null)
+					?? type.GetProperty("Item", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetSetMethod(true);
+				Expression body;
+				if (type == typeof(bool[])) body = Expression.Assign(Expression.ArrayAccess(target, indexArg), valueArg);
+				else if (setter != null) body = Expression.Call(target, setter, indexArg, valueArg);
+				else return;
+				_nativeFogWriter = Expression.Lambda<Action<int, bool>>(body, indexArg, valueArg).Compile();
 			}
-			catch { }
+			_nativeFogWriter(index, value);
+		}
+
+		private int CellIndexOrInvalid(int x, int z)
+		{
+			return (uint)x < (uint)mapSizeX && (uint)z < (uint)mapSizeZ ? z * mapSizeX + x : -1;
+		}
+
+		private void QueueFogChange(int index)
+		{
+			// Called under fogLock, including when a temporary reveal revisits a cell.
+			pendingChanges.Add(index);
+		}
+
+		private void FlushFogChanges()
+		{
+			lock (fogLock)
+			{
+				if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome)
+				{
+					pendingChanges.Clear();
+					return;
+				}
+				foreach (int index in pendingChanges)
+				{
+					ApplyWarFogChangeMainThread(index, false);
+					int x = index % mapSizeX, z = index / mapSizeX;
+					// Vanilla's two-argument API invalidates sections touched by all eight
+					// adjacent cells as well as the changed cell, even across corners.
+					for (int dz = -1; dz <= 1; dz++)
+					for (int dx = -1; dx <= 1; dx++)
+					{
+						int nx = x + dx, nz = z + dz;
+						if ((uint)nx < (uint)mapSizeX && (uint)nz < (uint)mapSizeZ)
+							dirtyNativeSections.Add(new IntVec2(nx / Section.Size, nz / Section.Size));
+					}
+				}
+				foreach (IntVec2 section in dirtyNativeSections)
+					map.mapDrawer.MapMeshDirty(new IntVec3(section.x * Section.Size, 0, section.z * Section.Size),
+						MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things, false, false);
+				dirtyNativeSections.Clear();
+				pendingChanges.Clear();
+			}
 		}
 		private void OnRegionsRoomsChanged()
 		{
-			if (!map.IsPlayerHome) return;
-			_indoorCacheLastTick = -9999;
-			try
+			lock (fogLock)
 			{
-				int mapSizeX  = map.Size.x;
-				int mapSizeZ  = map.Size.z;
-				RegionGrid rg = map.regionGrid;
-				int[] dx = { -1, 0, 1, -1, 1, -1, 0, 1 };
-				int[] dz = { -1, -1, -1, 0, 0, 1, 1, 1 };
-
-				void ClearCAICell(int idx, IntVec3 cell)
+				if (!map.IsPlayerHome) return;
+				Interlocked.Increment(ref indoorRevision);
+				try
 				{
-					if ((uint)idx >= (uint)fogState.Length) return;
-					if (fogState[idx] != CellFogState.CAIFogged) return;
-					fogState[idx] = CellFogState.VanillaExplored;
-					WriteNativeFogBit(idx, false);
-					map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-				}
+					int mapSizeX  = map.Size.x;
+					int mapSizeZ  = map.Size.z;
+					RegionGrid rg = map.regionGrid;
+					int[] dx = { -1, 0, 1, -1, 1, -1, 0, 1 };
+					int[] dz = { -1, -1, -1, 0, 0, 1, 1, 1 };
 
-				foreach (Room room in map.regionAndRoomUpdater.roomLookup.Values)
-				{
-					if (!room.ProperRoom || room.Dereferenced) continue;
-
-					bool roomHasUnexplored = false;
-					foreach (IntVec3 cell in room.Cells)
+					void ClearCAICell(int idx, IntVec3 cell)
 					{
-						int idx = cellIndices.CellToIndex(cell);
-						if ((uint)idx < (uint)fogState.Length && fogState[idx] == CellFogState.VanillaUnexplored)
+						if ((uint)idx >= (uint)fogState.Length) return;
+						if (fogState[idx] != CellFogState.CAIFogged) return;
+						fogState[idx] = CellFogState.VanillaExplored;
+						WriteNativeFogBit(idx, false);
+						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					}
+
+					foreach (Room room in map.regionAndRoomUpdater.roomLookup.Values)
+					{
+						if (!room.ProperRoom || room.Dereferenced) continue;
+
+						bool roomHasUnexplored = false;
+						foreach (IntVec3 cell in room.Cells)
 						{
-							roomHasUnexplored = true;
-							break;
+							int idx = cellIndices.CellToIndex(cell);
+							if ((uint)idx < (uint)fogState.Length && fogState[idx] == CellFogState.VanillaUnexplored)
+							{
+								roomHasUnexplored = true;
+								break;
+							}
+						}
+						if (roomHasUnexplored) continue;
+						foreach (IntVec3 cell in room.Cells)
+						{
+							int idx = cellIndices.CellToIndex(cell);
+							ClearCAICell(idx, cell);
+							int cx = cell.x; int cz = cell.z;
+							for (int d = 0; d < 8; d++)
+							{
+								int nx = cx + dx[d]; int nz = cz + dz[d];
+								if ((uint)nx >= (uint)mapSizeX || (uint)nz >= (uint)mapSizeZ) continue;
+								int ni = nz * mapSizeX + nx;
+								Region nReg = rg.GetValidRegionAt_NoRebuild(new IntVec3(nx, 0, nz));
+								if (nReg != null && nReg.type != RegionType.Portal && (nReg.Room == null || !nReg.Room.ProperRoom)) continue;
+								ClearCAICell(ni, new IntVec3(nx, 0, nz));
+							}
 						}
 					}
-					if (roomHasUnexplored) continue;
-					foreach (IntVec3 cell in room.Cells)
-					{
-						int idx = cellIndices.CellToIndex(cell);
-						ClearCAICell(idx, cell);
-						int cx = cell.x; int cz = cell.z;
-						for (int d = 0; d < 8; d++)
-						{
-							int nx = cx + dx[d]; int nz = cz + dz[d];
-							if ((uint)nx >= (uint)mapSizeX || (uint)nz >= (uint)mapSizeZ) continue;
-							int ni = nz * mapSizeX + nx;
-							Region nReg = rg.GetValidRegionAt_NoRebuild(new IntVec3(nx, 0, nz));
-							if (nReg != null && nReg.type != RegionType.Portal && (nReg.Room == null || !nReg.Room.ProperRoom)) continue;
-							ClearCAICell(ni, new IntVec3(nx, 0, nz));
-						}
-					}
 				}
+				catch { }
 			}
-			catch { }
 		}
 
 		private void RebuildIndoorRoomCache()
+		{
+			lock (fogLock) RebuildIndoorRoomCacheLocked();
+		}
+
+		private void RebuildIndoorRoomCacheLocked()
 		{
 			if (map == null) return;
 			int count    = cellIndices.NumGridCells;
@@ -627,43 +693,50 @@ namespace CombatAI
 
 		private void InitializeFogStateFromVanilla()
 		{
-			if (map?.fogGrid == null) return;
-			try
+			lock (fogLock)
 			{
-				for (int i = 0; i < fogState.Length; i++)
+				if (map?.fogGrid == null) return;
+				Interlocked.Increment(ref indoorRevision);
+				try
 				{
-					if (fogState[i] == CellFogState.CAIFogged) continue; 
-					fogState[i] = map.fogGrid.IsFogged(i)
-						? CellFogState.VanillaUnexplored
-						: CellFogState.VanillaExplored;
+					for (int i = 0; i < fogState.Length; i++)
+					{
+						if (fogState[i] == CellFogState.CAIFogged) continue;
+						fogState[i] = map.fogGrid.IsFogged(i)
+							? CellFogState.VanillaUnexplored
+							: CellFogState.VanillaExplored;
+					}
 				}
-			}
-			catch (Exception e)
-			{
-				Log.Error($"MapComponent_FogGrid: error in InitializeFogStateFromVanilla: {e}");
+				catch (Exception e)
+				{
+					Log.Error($"MapComponent_FogGrid: error in InitializeFogStateFromVanilla: {e}");
+				}
 			}
 		}
 
 		private void ClearVanillaFogBitsOnly()
 		{
-			try
+			lock (fogLock)
 			{
-				for (int i = 0; i < fogState.Length; i++)
+				try
 				{
-					if (fogState[i] == CellFogState.CAIFogged)
-						WriteNativeFogBit(i, false);
+					for (int i = 0; i < fogState.Length; i++)
+					{
+						if (fogState[i] == CellFogState.CAIFogged)
+							WriteNativeFogBit(i, false);
+					}
+					if (map?.mapDrawer != null)
+					{
+						foreach (var cell in map.AllCells)
+							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					}
+					if (Finder.Settings.Debug)
+						Log.Message($"MapComponent_FogGrid: cleared vanilla fog bits (CAI state retained) for map {map}");
 				}
-				if (map?.mapDrawer != null)
+				catch (Exception e)
 				{
-					foreach (var cell in map.AllCells)
-						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
+					Log.Error($"MapComponent_FogGrid: error in ClearVanillaFogBitsOnly: {e}");
 				}
-				if (Finder.Settings.Debug)
-					Log.Message($"MapComponent_FogGrid: cleared vanilla fog bits (CAI state retained) for map {map}");
-			}
-			catch (Exception e)
-			{
-				Log.Error($"MapComponent_FogGrid: error in ClearVanillaFogBitsOnly: {e}");
 			}
 		}
 
@@ -703,7 +776,7 @@ namespace CombatAI
 				InitializeFogStateFromVanilla();
 				for (int i = 0; i < grid2d.Length; i++)
 				{
-					grid2d[i] = new ISection[Mathf.CeilToInt(CellIndicesCompat.GetMapSizeZ(cellIndices) / (float)SECTION_SIZE)];
+					grid2d[i] = new ISection[Mathf.CeilToInt(mapSizeZ / (float)SECTION_SIZE)];
 					for (int j = 0; j < grid2d[i].Length; j++)
 					{
 						grid2d[i][j] = new ISection(this, new Rect(new Vector2(i * SECTION_SIZE, j * SECTION_SIZE), Vector2.one * SECTION_SIZE), mapRect, mesh, fogTex, fogShader);
@@ -746,10 +819,10 @@ namespace CombatAI
 				SkyGlow = map.skyManager.CurSkyGlow;
 				Rect     rect     = new Rect();
 				CellRect cellRect = Find.CameraDriver.CurrentViewRect;
-				rect.xMin     = Mathf.Clamp(cellRect.minX - SECTION_SIZE, 0, CellIndicesCompat.GetMapSizeX(cellIndices));
-				rect.xMax     = Mathf.Clamp(cellRect.maxX + SECTION_SIZE, 0, CellIndicesCompat.GetMapSizeX(cellIndices));
-				rect.yMin     = Mathf.Clamp(cellRect.minZ - SECTION_SIZE, 0, CellIndicesCompat.GetMapSizeZ(cellIndices));
-				rect.yMax     = Mathf.Clamp(cellRect.maxZ + SECTION_SIZE, 0, CellIndicesCompat.GetMapSizeZ(cellIndices));
+				rect.xMin     = Mathf.Clamp(cellRect.minX - SECTION_SIZE, 0, mapSizeX);
+				rect.xMax     = Mathf.Clamp(cellRect.maxX + SECTION_SIZE, 0, mapSizeX);
+				rect.yMin     = Mathf.Clamp(cellRect.minZ - SECTION_SIZE, 0, mapSizeZ);
+				rect.yMax     = Mathf.Clamp(cellRect.maxZ + SECTION_SIZE, 0, mapSizeZ);
 				mapScreenRect = rect;
 				// publish visible section bounds for the off-thread loop to prioritize
 				screenMinU = Mathf.FloorToInt(mapScreenRect.xMin / SECTION_SIZE);
@@ -757,12 +830,19 @@ namespace CombatAI
 				screenMaxU = Mathf.FloorToInt(mapScreenRect.xMax / SECTION_SIZE);
 				screenMaxV = Mathf.FloorToInt(mapScreenRect.yMax / SECTION_SIZE);
 				//mapScreenRect.ExpandedBy(32, 32);
-				if (map.IsPlayerHome && ticksGame - _indoorCacheLastTick >= INDOOR_CACHE_REBUILD_INTERVAL)
+				if (previousIndoorVisible != Finder.Settings.FogOfWar_IndoorVisible || previousIndoorHome != _cachedIsPlayerHome)
 				{
-					_indoorCacheLastTick = ticksGame;
+					previousIndoorVisible = Finder.Settings.FogOfWar_IndoorVisible;
+					previousIndoorHome = _cachedIsPlayerHome;
+					Interlocked.Increment(ref indoorRevision);
+				}
+				if (map.IsPlayerHome && rebuiltIndoorRevision != Volatile.Read(ref indoorRevision))
+				{
+					rebuiltIndoorRevision = Volatile.Read(ref indoorRevision);
 					RebuildIndoorRoomCache();
 				}
 				asyncActions.ExecuteMainThreadActions();
+				FlushFogChanges();
 				DrawFog(Mathf.FloorToInt(mapScreenRect.xMin / SECTION_SIZE), Mathf.FloorToInt(mapScreenRect.yMin / SECTION_SIZE), Mathf.FloorToInt(mapScreenRect.xMax / SECTION_SIZE), Mathf.FloorToInt(mapScreenRect.yMax / SECTION_SIZE));
 			}
 		}
@@ -799,8 +879,6 @@ namespace CombatAI
 			minU = Mathf.Clamp(minU - 1, 0, grid2d.Length - 1);
 			maxV = Mathf.Clamp(Maths.Max(maxV, minV + 1), 0, grid2d[0].Length - 1);
 			minV = Mathf.Clamp(minV - 1, 0, grid2d[0].Length - 1);
-			bool  update       = updateNum % 2 == 0;
-			bool  updateForced = updateNum % 4 == 0;
 			float color        = Finder.Settings.FogOfWar_FogColor;
 			for (int u = minU; u <= maxU; u++)
 			{
@@ -811,14 +889,13 @@ namespace CombatAI
 					{
 						section.ApplyColor();
 					}
-					if (updateForced || update && section.dirty)
+					if (section.dirty)
 					{
 						section.ApplyFogged();
 					}
 					section.Draw();
 				}
 			}
-			updateNum++;
 		}
 
 		private void OffThreadLoop()
@@ -859,7 +936,7 @@ namespace CombatAI
 										tCell.val       = Mathf.Clamp01(1f - cell.DistanceTo_Fast(spot.center) / spot.radius);
 										tCell.timestamp = GenTicks.TicksGame;
 										tCell.duration  = (short)spot.duration;
-										section.extraCells.Add(tCell);
+										lock (fogLock) section.extraCells.Add(tCell);
 									}
 								}
 							};
@@ -879,16 +956,20 @@ namespace CombatAI
 							grid2d[u][v].Update();
 						}
 					}
-					// Background update budget scales with tick rate multiplier
-					int bgBudget = Mathf.Clamp(Mathf.CeilToInt(16f * tickRateMultiplier), 4, grid2d.Length * grid2d[0].Length);
+					// Keep the per-pass budget fixed: pacing already scales with tick rate.
+					int bgBudget = 16;
 					int totalU = grid2d.Length;
 					int totalV = grid2d[0].Length;
-					while (bgBudget > 0)
+					int examined = 0;
+					while (bgBudget > 0 && examined++ < totalU * totalV)
 					{
 						// wrap indices
 						if (backgroundNextU >= totalU) { backgroundNextU = 0; backgroundNextV = 0; }
-						grid2d[backgroundNextU][backgroundNextV].Update();
-						bgBudget--;
+						if (backgroundNextU < visMinU || backgroundNextU > visMaxU || backgroundNextV < visMinV || backgroundNextV > visMaxV)
+						{
+							grid2d[backgroundNextU][backgroundNextV].Update();
+							bgBudget--;
+						}
 						backgroundNextV++;
 						if (backgroundNextV >= totalV) { backgroundNextV = 0; backgroundNextU++; }
 					}
@@ -918,13 +999,9 @@ namespace CombatAI
 			private readonly Material             mat;
 			private readonly Mesh                 mesh;
 			private readonly Vector3              pos;
-			public           bool                 dirty = true;
+			public volatile  bool                 dirty = true;
 			public           Rect                 rect;
 			public           float                s_color;
-			// Pre-allocated batch buffer: collects fog-change indices during Update() so we
-			// enqueue ONE main-thread action per section instead of one per changed cell.
-			private readonly int[]               _pendingBatch     = new int[SECTION_SIZE * SECTION_SIZE];
-			private          int                 _pendingBatchCount = 0;
 
 			public ISection(MapComponent_FogGrid comp, Rect rect, Rect mapRect, Mesh mesh, Texture2D tex, Shader shader)
 			{
@@ -948,16 +1025,25 @@ namespace CombatAI
 
 			public void ApplyFogged()
 			{
-				mat.SetFloatArray("_Fog", cells);
-				dirty = false;
+				lock (comp.fogLock)
+				{
+					if (!dirty) return;
+					mat.SetFloatArray("_Fog", cells);
+					dirty = false;
+				}
 			}
 
-			public void Update(bool runOnMainThread = false)
+			public void Update()
+			{
+				lock (comp.fogLock) dirty |= UpdateLocked();
+			}
+
+			private bool UpdateLocked()
 			{
 				var indicesNullable = comp.map?.cellIndices;
 				if (!indicesNullable.HasValue)
 				{
-					return;
+					return false;
 				}
 				CellIndices indices = indicesNullable.Value;
 				int         numGridCells = indices.NumGridCells;
@@ -972,15 +1058,21 @@ namespace CombatAI
 
 				void SetCell(int x, int z, float glowOffset, float visibilityOffset, bool allowLowerValues)
 				{
-                        int index = indices.CellToIndex(loc = pos + new IntVec3(x, 0, z));
+                        loc = pos + new IntVec3(x, 0, z);
+                        int index = comp.CellIndexOrInvalid(loc.x, loc.z);
+                        if (index < 0) return;
 
 				{
 					bool[] indoorCache = comp._indoorRoomCache;
-					if (indoorCache != null && index >= 0 && index < indoorCache.Length && indoorCache[index])
+					if (comp._cachedIsPlayerHome && indoorCache != null && index >= 0 && index < indoorCache.Length && indoorCache[index])
 					{
+						if (cells[x * SECTION_SIZE + z] != 0f) changed = true;
 						cells[x * SECTION_SIZE + z] = 0f;
 						if (comp.fogState[index] == CellFogState.CAIFogged)
+						{
 							comp.fogState[index] = CellFogState.VanillaExplored;
+							comp.QueueFogChange(index);
+						}
 						return;
 					}
 				}
@@ -991,10 +1083,12 @@ namespace CombatAI
 						float visRLimit     = 0;
                         	float visibility    = fogGrid.Get(index);
 						float visibilityAdj = 0;
+						if (!isWall && walls != null)
 						for (int i = 0; i < 9; i++)
 						{
-							int adjIndex = index + CellIndicesCompat.GetMapSizeX(indices) * (i / 3 - 1) + i % 3 - 1;
-							if (adjIndex >= 0 && adjIndex < numGridCells && !isWall && walls != null && walls.CanBeSeenOver(adjIndex))
+							int nx = loc.x + i % 3 - 1, nz = loc.z + i / 3 - 1;
+							int adjIndex = comp.CellIndexOrInvalid(nx, nz);
+							if (adjIndex >= 0 && walls.CanBeSeenOver(adjIndex))
 							{
 								visibilityAdj += fogGrid.Get(adjIndex);
 							}
@@ -1022,7 +1116,7 @@ namespace CombatAI
 								if (prevState == CellFogState.VanillaExplored)
 								{
 									bool[] protect = comp._indoorProtectCache;
-									if (protect == null || (uint)index >= (uint)protect.Length || !protect[index])
+									if (!comp._cachedIsPlayerHome || protect == null || (uint)index >= (uint)protect.Length || !protect[index])
 										comp.fogState[index] = CellFogState.CAIFogged;
 								}
 							}
@@ -1040,20 +1134,12 @@ namespace CombatAI
 									catch { }
 								}
 							}
+							if (prevState == CellFogState.VanillaUnexplored && comp.fogState[index] != prevState)
+								Interlocked.Increment(ref comp.indoorRevision);
 							bool newEffFog = comp.fogState[index] != CellFogState.VanillaExplored;
 							if (prevFog != newEffFog)
 							{
-								if (runOnMainThread)
-								{
-									comp.ApplyWarFogChangeMainThread(index);
-								}
-								else
-								{
-									// Batch: collect into pre-allocated buffer; flush ONE Action per Update()
-									// instead of one closure per cell - avoids GC bursts / main-thread flooding.
-									if (_pendingBatchCount < _pendingBatch.Length)
-										_pendingBatch[_pendingBatchCount++] = index;
-								}
+								comp.QueueFogChange(index);
 							}
 						}
 						try
@@ -1068,7 +1154,6 @@ namespace CombatAI
 						catch { }
 						if (old != val)
 						{
-							changed = true;
 							if (allowLowerValues)
 							{
 								if (val > old)
@@ -1084,6 +1169,7 @@ namespace CombatAI
 							{
 								cells[x * SECTION_SIZE + z] = Maths.Min(old, val);
 							}
+							changed |= old != cells[x * SECTION_SIZE + z];
 						}
 					}
 					else
@@ -1109,7 +1195,6 @@ namespace CombatAI
 						if (tCell.timestamp + tCell.duration < ticks)
 						{
 							extraCells.RemoveAt(i);
-							changed = true;
 							continue;
 						}
 						i++;
@@ -1117,21 +1202,8 @@ namespace CombatAI
 						SetCell(tCell.u, tCell.v, 0.5f * fade * tCell.val, fade * tCell.val, false);
 					}
 				}
-				// Flush the batch: enqueue one main-thread action for all changed cells
-				// instead of the N individual closures that were built up inside SetCell.
-				if (_pendingBatchCount > 0)
-				{
-					int   count = _pendingBatchCount;
-					int[] batch = new int[count];
-					System.Array.Copy(_pendingBatch, batch, count);
-					_pendingBatchCount = 0;
-					comp.asyncActions.EnqueueMainThreadAction(() =>
-					{
-						for (int k = 0; k < batch.Length; k++)
-							comp.ApplyWarFogChangeMainThread(batch[k]);
-					});
-				}
-				dirty = changed;
+
+				return changed;
 			}
 
 			public void Draw()

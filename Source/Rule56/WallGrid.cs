@@ -11,6 +11,7 @@ namespace CombatAI
         private readonly CellIndices cellIndices;
         private readonly float[]     grid;
         private readonly float[]     gridNoDoors;
+        private int lastDoorUpdateTick = -1;
 
         public WallGrid(Map map) : base(map)
         {
@@ -45,15 +46,18 @@ namespace CombatAI
         public override void MapComponentUpdate()
         {
             base.MapComponentUpdate();
-            // Doors change their open percent frequently; ensure the grid is updated for doors.
-            if (Find.TickManager != null && Find.TickManager.TicksGame % 30 == 0)
+            // Update each scheduled tick once, including while the game is paused.
+            int tick = Find.TickManager?.TicksGame ?? -1;
+            if (tick >= 0 && tick % 30 == 0 && tick != lastDoorUpdateTick)
             {
+                lastDoorUpdateTick = tick;
                 try
                 {
-                    List<Thing> all = map.listerThings.AllThings;
-                    for (int i = 0; i < all.Count; i++)
+                    // RimWorld maintains this group across spawn, despawn, and load.
+                    List<Thing> doors = map.listerThings.ThingsInGroup(ThingRequestGroup.Door);
+                    for (int i = 0; i < doors.Count; i++)
                     {
-                        if (all[i] is Building_Door door && door.Spawned && !door.Destroyed)
+                        if (doors[i] is Building_Door door && door.Spawned && !door.Destroyed)
                         {
                             RecalculateCell(door.Position, door);
                         }

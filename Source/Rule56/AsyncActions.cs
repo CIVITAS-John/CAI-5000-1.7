@@ -16,8 +16,8 @@ namespace CombatAI
         public readonly  object locker_offMain = new object();
         private readonly int    mainLoopTickInterval;
 
-        private readonly List<Action>   queuedMainThreadActions = new List<Action>();
-        private readonly List<Action>   queuedOffThreadActions  = new List<Action>();
+        private readonly Queue<Action>  queuedMainThreadActions = new Queue<Action>();
+        private readonly Queue<Action>  queuedOffThreadActions  = new Queue<Action>();
         private readonly AutoResetEvent waitHandle              = new AutoResetEvent(false);
         private readonly Thread         thread;
         private volatile bool           mainThreadActionQueueEmpty;
@@ -103,7 +103,7 @@ namespace CombatAI
                 }
                 else
                 {
-                    queuedOffThreadActions.Add(action);
+                    queuedOffThreadActions.Enqueue(action);
                     waitHandle.Set();
                 }
             }
@@ -114,7 +114,7 @@ namespace CombatAI
             lock (locker_Main)
             {
                 if (!alive) return;
-                queuedMainThreadActions.Add(action);
+                queuedMainThreadActions.Enqueue(action);
                 mainThreadActionQueueEmpty = false;
             }
         }
@@ -126,8 +126,7 @@ namespace CombatAI
             {
                 if (alive && queuedOffThreadActions.Count > 0)
                 {
-                    action = queuedOffThreadActions[0];
-                    queuedOffThreadActions.RemoveAt(0);
+                    action = queuedOffThreadActions.Dequeue();
                 }
             }
             return action;
@@ -140,8 +139,7 @@ namespace CombatAI
             {
                 if (alive && queuedMainThreadActions.Count > 0)
                 {
-                    action = queuedMainThreadActions[0];
-                    queuedMainThreadActions.RemoveAt(0);
+                    action = queuedMainThreadActions.Dequeue();
                 }
                 mainThreadActionQueueEmpty = queuedMainThreadActions.Count == 0;
             }

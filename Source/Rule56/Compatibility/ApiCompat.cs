@@ -178,23 +178,45 @@ namespace CombatAI.Compatibility
 
     public static class GlowGridCompat
     {
+        private static readonly Dictionary<Type, Func<object, ColorInt[]>> getters = new Dictionary<Type, Func<object, ColorInt[]>>();
+
         public static ColorInt[] GetGlowGrid(object glowGrid)
         {
             if (glowGrid == null) return null;
-            var t = glowGrid.GetType();
-            var f = t.GetField("glowGrid", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (f != null)
+            Type type = glowGrid.GetType();
+            Func<object, ColorInt[]> getter;
+            lock (getters)
             {
-                var v = f.GetValue(glowGrid) as ColorInt[];
-                if (v != null) return v;
+                if (!getters.TryGetValue(type, out getter))
+                {
+                    getter = CreateGetter(type);
+                    getters.Add(type, getter);
+                }
             }
-            var p = t.GetProperty("GlowGrid", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (p != null)
+            // Cache the accessor, not the array: maps may replace their backing grid.
+            return getter(glowGrid);
+        }
+
+        private static Func<object, ColorInt[]> CreateGetter(Type type)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var field = type.GetField("glowGrid", flags);
+            var property = type.GetProperty("GlowGrid", flags);
+            var instance = System.Linq.Expressions.Expression.Parameter(typeof(object), "instance");
+            var target = System.Linq.Expressions.Expression.Convert(instance, type);
+            System.Linq.Expressions.Expression body = System.Linq.Expressions.Expression.Constant(null, typeof(ColorInt[]));
+            if (property != null)
             {
-                var v = p.GetValue(glowGrid) as ColorInt[];
-                if (v != null) return v;
+                body = System.Linq.Expressions.Expression.TypeAs(
+                    System.Linq.Expressions.Expression.Convert(System.Linq.Expressions.Expression.Property(target, property), typeof(object)), typeof(ColorInt[]));
             }
-            return null;
+            if (field != null)
+            {
+                var fieldValue = System.Linq.Expressions.Expression.TypeAs(
+                    System.Linq.Expressions.Expression.Convert(System.Linq.Expressions.Expression.Field(target, field), typeof(object)), typeof(ColorInt[]));
+                body = System.Linq.Expressions.Expression.Coalesce(fieldValue, body);
+            }
+            return System.Linq.Expressions.Expression.Lambda<Func<object, ColorInt[]>>(body, instance).Compile();
         }
     }
 

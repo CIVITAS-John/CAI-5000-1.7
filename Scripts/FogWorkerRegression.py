@@ -59,6 +59,7 @@ static class ListExtensions {
 class Worker {
     const int SECTION_SIZE = 16;
     readonly object _lockerSpots = new object();
+    readonly object fogLock = new object();
     readonly List<ITempSpot> spotsQueued = new List<ITempSpot>();
     readonly List<Vector3> spotBuffer = new List<Vector3>();
     readonly object map = new object();
@@ -67,14 +68,25 @@ class Worker {
     public volatile bool alive = true;
     public volatile bool ready = true;
     public int Updates;
+    public static Worker Observed;
+    public int StopAfterPasses;
+    public int Passes;
+    public bool Duplicate;
+    public readonly HashSet<ISection> SeenThisPass = new HashSet<ISection>();
+    public readonly HashSet<ISection> SeenEver = new HashSet<ISection>();
+    public void BeginPass() {
+        if (StopAfterPasses == 0) return;
+        if (Passes++ >= StopAfterPasses) { alive = false; ready = false; }
+        SeenThisPass.Clear();
+    }
     int ticksGame, screenMinU, screenMinV, screenMaxU, screenMaxV, backgroundNextU, backgroundNextV;
     float tickRateMultiplier;
-    public Worker(float multiplier, int delay) {
+    public Worker(float multiplier, int delay, int size = 2) {
         tickRateMultiplier = multiplier;
-        grid2d = new ISection[2][];
-        for (int u = 0; u < 2; u++) {
-            grid2d[u] = new ISection[2];
-            for (int v = 0; v < 2; v++) grid2d[u][v] = new ISection(this, delay);
+        grid2d = new ISection[size][];
+        for (int u = 0; u < size; u++) {
+            grid2d[u] = new ISection[size];
+            for (int v = 0; v < size; v++) grid2d[u][v] = new ISection(this, delay);
         }
     }
     public Thread Start() {
@@ -84,21 +96,48 @@ class Worker {
         return thread;
     }
     public void KillAsync() { asyncActions.Alive = false; }
-    class ISection {
+    public class ISection {
         readonly Worker owner;
         readonly int delay;
         public readonly List<ITempCell> extraCells = new List<ITempCell>();
         public ISection(Worker owner, int delay) { this.owner = owner; this.delay = delay; }
         public void Update() {
             if (delay > 0) Thread.Sleep(delay);
+            if (owner.StopAfterPasses > 0) {
+                if (!owner.SeenThisPass.Add(this)) owner.Duplicate = true;
+                owner.SeenEver.Add(this);
+            }
             Interlocked.Increment(ref owner.Updates);
         }
     }
     struct ITempSpot { public IntVec3 center; public float radius; public int duration; }
-    struct ITempCell { public byte u, v; public float val; public int timestamp; public short duration; }
+    public struct ITempCell { public byte u, v; public float val; public int timestamp; public short duration; }
     /* PRODUCTION_METHOD */
 }
+class PassStopwatch {
+    readonly Stopwatch watch = new Stopwatch();
+    public static long Frequency { get { return Stopwatch.Frequency; } }
+    public long ElapsedTicks { get { return watch.ElapsedTicks; } }
+    public void Restart() { watch.Restart(); if (Worker.Observed != null) Worker.Observed.BeginPass(); }
+}
 class Program {
+    static int? backgroundWork;
+    static bool Coverage(float multiplier) {
+        var worker = new Worker(multiplier, 0, 6);
+        worker.StopAfterPasses = 4;
+        Worker.Observed = worker;
+        Thread thread = worker.Start();
+        bool stopped = thread.Join(1500);
+        Worker.Observed = null;
+        bool bounded = worker.Updates > 4 * 4 && worker.Updates <= 4 * 36;
+        bool stableBudget = !backgroundWork.HasValue || backgroundWork.Value == worker.Updates;
+        backgroundWork = worker.Updates;
+        bool passed = stopped && !worker.Duplicate && worker.SeenEver.Count == 36 && bounded && stableBudget;
+        Console.WriteLine("unique updates and eventual offscreen refresh, multiplier=" + multiplier + ": " + (passed ? "PASS" : "FAIL")
+            + " (updates=" + worker.Updates + ", sections=" + worker.SeenEver.Count + ", duplicate=" + worker.Duplicate + ")");
+        if (!stopped) { worker.alive = false; thread.Join(500); }
+        return passed;
+    }
     static bool Check(string name, float multiplier, int delay, bool startReady, bool killAsync = false) {
         var worker = new Worker(multiplier, delay);
         worker.ready = startReady;
@@ -124,6 +163,9 @@ class Program {
         passed &= Check("normal speed, slow sections", 1, 3, true);
         passed &= Check("becomes ready after startup", 1, 0, false);
         passed &= Check("async shutdown stops worker", 1, 0, true, true);
+        passed &= Coverage(0);
+        passed &= Coverage(1);
+        passed &= Coverage(3);
         return passed ? 0 : 1;
     }
 }
@@ -137,7 +179,7 @@ def main():
         directory = Path(temporary)
         program = directory / "FogWorkerRegression.cs"
         executable = directory / "FogWorkerRegression.exe"
-        program.write_text(HARNESS.replace("/* PRODUCTION_METHOD */", worker_method(source.read_text())))
+        program.write_text(HARNESS.replace("/* PRODUCTION_METHOD */", worker_method(source.read_text()).replace("Stopwatch", "PassStopwatch")))
         subprocess.run(["mcs", "-warn:0", "-out:" + str(executable), str(program)], check=True)
         return subprocess.run(["mono", str(executable)], timeout=20).returncode
 
