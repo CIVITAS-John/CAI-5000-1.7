@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using RimWorld;
 using Verse;
@@ -15,6 +17,9 @@ namespace CombatAI.Comps
         }
 
         private static readonly ConditionalWeakTable<Map, ProjectileSnapshot> snapshots = new ConditionalWeakTable<Map, ProjectileSnapshot>();
+        // RimWorld keeps the landing-cell getter private; bind it once for reaction queries.
+        private static readonly Func<Projectile, IntVec3> getDestinationCell = (Func<Projectile, IntVec3>)Delegate.CreateDelegate(
+            typeof(Func<Projectile, IntVec3>), typeof(Projectile).GetProperty("DestinationCell", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetGetMethod(true));
 
         internal static bool TryFindNearbyFire(Map map, IntVec3 position, out IntVec3 fireCell)
         {
@@ -76,9 +81,11 @@ namespace CombatAI.Comps
                 if (!projectile.Spawned || projectile.Map != map) continue;
                 if (projectile.Launcher?.Faction != null && !projectile.Launcher.Faction.HostileTo(pawn.Faction)) continue;
                 LocalTargetInfo target = projectile.intendedTarget.IsValid ? projectile.intendedTarget : projectile.usedTarget;
-                if (!target.IsValid) continue;
-                if (target.HasThing && (!target.Thing.Spawned || target.Thing.Map != map)) continue;
-                IntVec3 cell = target.HasThing ? target.Thing.Position : target.Cell;
+                // Losing the target does not cancel a launched explosive's flight or detonation.
+                IntVec3 cell = !target.IsValid || target.HasThing && (!target.Thing.Spawned || target.Thing.Map != map)
+                    ? getDestinationCell(projectile)
+                    : target.Cell;
+                if (!cell.InBounds(map)) continue;
                 float radius = projectile.def.projectile.explosionRadius + 4f;
                 if (cell.DistanceTo(pawn.Position) < radius)
                 {

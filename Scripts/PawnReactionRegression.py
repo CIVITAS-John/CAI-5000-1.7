@@ -60,7 +60,7 @@ namespace Verse {
  public class ThingDef { public ProjectileProperties projectile; public bool IsMeleeWeapon; }
  public class ProjectileProperties { public bool flyOverhead; public float explosionRadius; }
  public class Fire : Thing {}
- public class Projectile : Thing { public Thing Launcher; public LocalTargetInfo intendedTarget,usedTarget; }
+ public class Projectile : Thing { public Thing Launcher; public LocalTargetInfo intendedTarget,usedTarget; public IntVec3 destination; private IntVec3 DestinationCell { get { return destination; } } }
  public struct LocalTargetInfo {
   public Thing Thing; private IntVec3 cell; private bool valid;
   public LocalTargetInfo(Thing t) { Thing=t;cell=IntVec3.Invalid;valid=t!=null; }
@@ -132,7 +132,7 @@ public class Pursuit {
 class Program {
  static void Check(bool ok,string name){if(!ok)throw new Exception(name);}
  static IntVec3 Cell(int x,int z){return new IntVec3(x,0,z);}
- static Projectile Shot(Map m,LocalTargetInfo target,Faction faction,float radius=2){return new Projectile{Map=m,Launcher=new Thing{Faction=faction},def=new ThingDef{projectile=new ProjectileProperties{explosionRadius=radius}},intendedTarget=target};}
+ static Projectile Shot(Map m,LocalTargetInfo target,Faction faction,float radius=2){return new Projectile{Map=m,Launcher=new Thing{Faction=faction},def=new ThingDef{projectile=new ProjectileProperties{explosionRadius=radius}},intendedTarget=target,destination=target.Cell};}
  static void Main(){
   var map=new Map();var pawn=new Pawn{Map=map,Position=Cell(20,20),Faction=new Faction{id=1}};IntVec3 cell;float radius;
   Check(!AreaThreats.TryFindNearbyFire(map,pawn.Position,out cell)&&map.listerThings.fireQueries==0,"empty local fire query avoids map list");
@@ -149,10 +149,15 @@ class Program {
   Check(AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius)&&cell==Cell(19,20)&&map.listerThings.projectileQueries==1,"moving landing target uses live position and shared tick snapshot");
   later.Spawned=false;
   Check(!AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius),"despawned snapshot projectile ignored");
-  landing.Position=pawn.Position;landing.Spawned=false;
-  Check(!AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius),"despawned landing target ignored");
+  landing.Spawned=false;landing.Map=null;
+  Check(AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius)&&cell==Cell(24,20)&&radius==6,"live explosive remains dangerous at its landing cell after target despawns, within the cached tick");
   landing.Spawned=true;landing.Map=new Map();
-  Check(!AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius),"landing target moved off map ignored");
+  Check(AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius)&&cell==Cell(24,20),"target moving to another map does not remove the local explosive threat");
+  landing.Position=pawn.Position;shot.destination=Cell(80,80);
+  Check(!AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius),"off-map target coordinates do not create a threat when the landing cell is far away");
+  shot.destination=IntVec3.Invalid;
+  Check(!AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius),"invalid landing cell ignored");
+  shot.destination=Cell(24,20);
   landing.Map=map;shot.Launcher.Faction=pawn.Faction;
   Check(!AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius),"launcher faction stays live");
   var newlyLaunched=Shot(map,new LocalTargetInfo(pawn.Position),hostile);map.listerThings.projectiles.Add(newlyLaunched);
@@ -161,6 +166,8 @@ class Program {
   Check(AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius)&&map.listerThings.projectileQueries==2,"new launch discovered next tick");
   newlyLaunched.intendedTarget=default(LocalTargetInfo);newlyLaunched.usedTarget=new LocalTargetInfo(Cell(19,20));
   Check(AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius)&&cell==Cell(19,20),"used target fallback remains live");
+  newlyLaunched.usedTarget=default(LocalTargetInfo);
+  Check(AreaThreats.TryFindIncomingProjectile(pawn,out cell,out radius)&&cell==pawn.Position,"live explosive with no valid target still uses its landing cell");
   var other=new Pawn{Map=new Map(),Position=pawn.Position,Faction=pawn.Faction};
   Check(!AreaThreats.TryFindIncomingProjectile(other,out cell,out radius),"map snapshots are isolated");
 
