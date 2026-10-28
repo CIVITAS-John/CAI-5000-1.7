@@ -64,6 +64,25 @@ namespace CombatAI
 		public readonly SightTracker sightTracker;
 		private readonly List<Thing> thingBuffer1 = new List<Thing>(256);
 		private readonly List<Thing> thingBuffer2 = new List<Thing>(256);
+		// Reused only while completing a scan on the main thread, never by the sight worker.
+		private readonly List<SpottingCandidate> spottingCandidates = new List<SpottingCandidate>(256);
+		private readonly List<int> spottedCandidateOrder = new List<int>(64);
+		private readonly int[] spottingBucketStarts = new int[64];
+		private readonly int[] spottingBucketCounts = new int[64];
+		private ulong expandedSpottingBuckets;
+
+		private struct SpottingCandidate
+		{
+			public Thing thing;
+			public IntVec3 position;
+			public IntVec3 predictedPosition;
+			public AIEnvAgentState state;
+			public bool hasPrediction;
+			public bool checkedDormancy;
+			public bool dormant;
+			public bool matched;
+		}
+
 		/// <summary>
 		///     Things UInt64 map.
 		/// </summary>
@@ -677,30 +696,7 @@ namespace CombatAI
 						{
 							if (!item.thing.Destroyed && item.thing.Spawned)
 							{
-								for (int i = 0; i < item.spottings.Count; i++)
-								{
-									ISpotRecord record = item.spottings[i];
-									thingBuffer1.Clear();
-									sightTracker.factionedUInt64Map.GetThings(record.flag, thingBuffer1);
-									for (int j = 0; j < thingBuffer1.Count; j++)
-									{
-										Thing agent = thingBuffer1[j];
-										if (agent != item.thing
-										    && agent.Spawned
-										    && (agent.Position.DistanceToSquared(record.cell) < 225 || agent is Pawn enemyPawn && PawnPathUtility.GetMovingShiftedPosition(enemyPawn, 70).DistanceToSquared(record.cell) < 255)
-										    && !agent.IsDormant())
-										{
-											if (agent.HostileTo(item.thing))
-											{
-												item.ai.Notify_Enemy(new AIEnvAgentInfo(agent, (AIEnvAgentState)record.state));
-											}
-											else
-											{
-												item.ai.Notify_Ally(new AIEnvAgentInfo(agent, (AIEnvAgentState)record.state));
-											}
-										}
-									}
-								}
+								NotifySpottings(item);
 								int p = 0;
 								//
 								// notify the pawn so they can start processing targets.   
@@ -722,6 +718,109 @@ namespace CombatAI
 			asyncActions.EnqueueOffThreadAction(action);
 			item.lastCycle = grid.CycleNum;
 			return true;
+		}
+
+		private void NotifySpottings(IBucketableThing item)
+		{
+			try
+			{
+				for (int i = 0; i < item.spottings.Count; i++)
+				{
+					ISpotRecord record = item.spottings[i];
+					AIEnvAgentState state = (AIEnvAgentState)record.state;
+					ulong remaining = record.flag;
+					// Match GetThings' ascending bucket order, then the order within each bucket.
+					for (int bucket = 0; remaining != 0; bucket++, remaining >>= 1)
+					{
+						if ((remaining & 1UL) == 0)
+						{
+							continue;
+						}
+						ExpandSpottingBucket(bucket, item.thing);
+						int end = spottingBucketStarts[bucket] + spottingBucketCounts[bucket];
+						for (int j = spottingBucketStarts[bucket]; j < end; j++)
+						{
+							SpottingCandidate candidate = spottingCandidates[j];
+							if (candidate.dormant || candidate.matched && (candidate.state & state) == state)
+							{
+								continue;
+							}
+							bool inRange = candidate.position.DistanceToSquared(record.cell) < 225;
+							if (!inRange && candidate.thing is Pawn pawn)
+							{
+								if (!candidate.hasPrediction)
+								{
+									candidate.predictedPosition = PawnPathUtility.GetMovingShiftedPosition(pawn, 70);
+									candidate.hasPrediction = true;
+								}
+								inRange = candidate.predictedPosition.DistanceToSquared(record.cell) < 255;
+							}
+							if (inRange)
+							{
+								if (!candidate.checkedDormancy)
+								{
+									candidate.dormant = candidate.thing.IsDormant();
+									candidate.checkedDormancy = true;
+								}
+								if (!candidate.dormant)
+								{
+									if (!candidate.matched)
+									{
+										spottedCandidateOrder.Add(j);
+										candidate.matched = true;
+									}
+									candidate.state |= state;
+								}
+							}
+							spottingCandidates[j] = candidate;
+						}
+					}
+				}
+				// Notify once per actual Thing, with all states and first-match ordering preserved.
+				for (int i = 0; i < spottedCandidateOrder.Count; i++)
+				{
+					SpottingCandidate candidate = spottingCandidates[spottedCandidateOrder[i]];
+					AIEnvAgentInfo info = new AIEnvAgentInfo(candidate.thing, candidate.state);
+					if (candidate.thing.HostileTo(item.thing))
+					{
+						item.ai.Notify_Enemy(info);
+					}
+					else
+					{
+						item.ai.Notify_Ally(info);
+					}
+				}
+			}
+			finally
+			{
+				expandedSpottingBuckets = 0;
+				spottingCandidates.Clear();
+				spottedCandidateOrder.Clear();
+				thingBuffer1.Clear();
+			}
+		}
+
+		private void ExpandSpottingBucket(int bucket, Thing observer)
+		{
+			ulong flag = 1UL << bucket;
+			if ((expandedSpottingBuckets & flag) != 0)
+			{
+				return;
+			}
+			expandedSpottingBuckets |= flag;
+			int start = spottingCandidates.Count;
+			sightTracker.factionedUInt64Map.GetThings(flag, thingBuffer1);
+			// The map stores each Thing in exactly one bucket. Colliding flags still get separate facts.
+			for (int i = 0; i < thingBuffer1.Count; i++)
+			{
+				Thing agent = thingBuffer1[i];
+				if (agent != observer && agent.Spawned)
+				{
+					spottingCandidates.Add(new SpottingCandidate { thing = agent, position = agent.Position });
+				}
+			}
+			spottingBucketStarts[bucket] = start;
+			spottingBucketCounts[bucket] = spottingCandidates.Count - start;
 		}
 
 		private IntVec3 GetShiftedPosition(Thing thing, int ticksAhead, List<IntVec3> subPath)

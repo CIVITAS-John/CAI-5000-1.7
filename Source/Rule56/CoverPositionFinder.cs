@@ -22,7 +22,6 @@ namespace CombatAI
 
         private static readonly List<Func<IntVec3, bool>>    enemyVerbs = new List<Func<IntVec3, bool>>();
         private static readonly Dictionary<IntVec3, IntVec3> parentTree = new Dictionary<IntVec3, IntVec3>(512);
-        private static readonly Dictionary<IntVec3, float>   scores     = new Dictionary<IntVec3, float>(512);
 
         static CoverPositionFinder()
         {
@@ -112,8 +111,8 @@ namespace CombatAI
             flooder.Flood(request.locus,
                           node =>
                           {
-	                          
-                              if (request.verb != null && (sightReader.GetNearestEnemy(node.cell).DistanceToSquared(enemyLoc) > Maths.Sqr(effectiveRange) || !request.verb.CanHitTargetFrom(node.cell, enemyLoc)) || maxDistSqr < request.locus.DistanceToSquared(node.cell) || !map.reservationManager.CanReserve(caster, node.cell))
+                              if (maxDistSqr < request.locus.DistanceToSquared(node.cell) || !map.reservationManager.CanReserve(caster, node.cell) ||
+                                  request.verb != null && (sightReader.GetNearestEnemy(node.cell).DistanceToSquared(enemyLoc) > Maths.Sqr(effectiveRange) || !request.verb.CanHitTargetFrom(node.cell, enemyLoc)))
                               {
                                   return;
                               }
@@ -134,6 +133,11 @@ namespace CombatAI
                               {
                                   for (int i = 0; i < enemyVerbs.Count; i++)
                                   {
+                                      // Hit penalties only increase c. Keep complete scores for callbacks and exploding-score logs.
+                                      if (callback == null && c <= 5000f - (enemyVerbs.Count - i) && !(bestCellScore - c >= 0.05f))
+                                      {
+                                          return;
+                                      }
                                       if (enemyVerbs[i](node.cell))
                                       {
                                           c += 1;
@@ -223,7 +227,6 @@ namespace CombatAI
                 }
             }
             parentTree.Clear();
-            scores.Clear();
             metric_retreat.Begin(map, sightReader, avoidanceReader, request.locus);
             metric_retreatPath.Begin(map, sightReader, avoidanceReader, request.locus);
             IntVec3            dutyDest           = caster.TryGetNextDutyDest(request.maxRangeFromCaster);
@@ -266,7 +269,6 @@ namespace CombatAI
                               {
                                   callback(node.cell, c);
                               }
-                              scores[node.cell] = c;
                           },
                           cell =>
                           {
@@ -380,6 +382,12 @@ namespace CombatAI
                               int visibleTo = 0;
                               for (int i = 0; i < enemyVerbs.Count; i++)
                               {
+                                  // Include the final warmup penalty without changing its addition order below.
+                                  float minScore = node.cell == request.locus ? c + enemiesWarmingUp / 5f : c;
+                                  if (callback == null && !(bestCellScore - minScore >= 0.05f))
+                                  {
+                                      return;
+                                  }
                                   if (enemyVerbs[i](node.cell))
                                   {
                                       c += 1;

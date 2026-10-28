@@ -25,6 +25,11 @@ namespace CombatAI.Comps
         ///     Set of visible enemies. A queue for visible enemies during scans.
         /// </summary>
         private readonly List<Thing> rangedEnemiesTargetingSelf = new List<Thing>(4);
+        private List<Thing> focusFireCandidates;
+        private Dictionary<Thing, int> focusFireAllyCounts;
+        private int searchAndDestroyJobId = -1;
+        private int lastSearchAndDestroyTick = -1;
+        private Thing searchAndDestroyTarget;
         /// <summary>
         ///     Sapper path nodes.
         /// </summary>
@@ -255,20 +260,28 @@ namespace CombatAI.Comps
         ///     For AutoControl pawns: pick the best focus-fire target among visible enemies.
         ///     Scoring: thrown/explosive weapon (50%) + low HP% (35%) + targeted by allies (15%).
         /// </summary>
-        private bool TryGetFocusFireTarget(ulong selFlags, Verb verb, out Thing target)
+        private bool TryGetFocusFireTarget(out Thing target)
         {
             target = null;
-            if (selPawn.Map == null) return false;
+            if (selPawn.Map == null || focusFireCandidates == null || focusFireCandidates.Count == 0) return false;
+            focusFireAllyCounts ??= new Dictionary<Thing, int>();
             float bestScore  = -1f;
             Thing bestTarget = null;
-            IEnumerator<AIEnvAgentInfo> enumerator = data.Enemies();
-            while (enumerator.MoveNext())
+            focusFireAllyCounts.Clear();
+            var allies = data.EnumerateAllies();
+            while (allies.MoveNext())
             {
-                AIEnvAgentInfo info = enumerator.Current;
-                if (info.thing == null || !info.thing.Spawned) continue;
-                if ((sightReader.GetDynamicFriendlyFlags(info.thing.Position) & selFlags) == 0) continue;
-                if (!verb.CanHitTarget(info.thing)) continue;
-                Pawn  ep      = info.thing as Pawn;
+                if (allies.Current.thing is Pawn ally && ally.mindState?.enemyTarget is Thing allyTarget)
+                {
+                    focusFireAllyCounts.TryGetValue(allyTarget, out int count);
+                    focusFireAllyCounts[allyTarget] = count + 1;
+                }
+            }
+            // Candidates passed the visibility and CanHitTarget checks in this same reaction.
+            for (int i = 0; i < focusFireCandidates.Count; i++)
+            {
+                Thing enemy = focusFireCandidates[i];
+                Pawn  ep      = enemy as Pawn;
                 float hpScore = ep != null ? 1f - ep.health.summaryHealth.SummaryHealthPercent : 0f;
                 // Bonus for enemies using thrown/explosive projectiles (grenades, mortars, etc.)
                 float throwScore = 0f;
@@ -280,19 +293,15 @@ namespace CombatAI.Comps
                         throwScore = 1f;
                     }
                 }
-                int   allies  = 0;
-                IEnumerator<AIEnvAgentInfo> ae = data.Allies();
-                while (ae.MoveNext())
-                {
-                    if (ae.Current.thing is Pawn a && a.mindState?.enemyTarget == info.thing) allies++;
-                }
-                float score = throwScore * 0.5f + hpScore * 0.35f + Mathf.Min(allies * 0.15f, 0.45f) * 0.15f;
+                focusFireAllyCounts.TryGetValue(enemy, out int allyCount);
+                float score = throwScore * 0.5f + hpScore * 0.35f + Mathf.Min(allyCount * 0.15f, 0.45f) * 0.15f;
                 if (score > bestScore)
                 {
                     bestScore  = score;
-                    bestTarget = info.thing;
+                    bestTarget = enemy;
                 }
             }
+            focusFireAllyCounts.Clear();
             if (bestTarget != null) { target = bestTarget; return true; }
             return false;
         }
@@ -306,7 +315,7 @@ namespace CombatAI.Comps
             flankTarget = null;
             flankPos    = IntVec3.Invalid;
             if (selPawn.Map == null) return false;
-            IEnumerator<AIEnvAgentInfo> alliesEnum = data.Allies();
+            var alliesEnum = data.EnumerateAllies();
             while (alliesEnum.MoveNext())
             {
                 if (!(alliesEnum.Current.thing is Pawn ally)) continue;
@@ -360,7 +369,7 @@ namespace CombatAI.Comps
             float perpZ =  dx / len;
             // Count allies on each perpendicular side of our approach line
             int leftCount = 0, rightCount = 0;
-            IEnumerator<AIEnvAgentInfo> allies = data.Allies();
+            var allies = data.EnumerateAllies();
             while (allies.MoveNext())
             {
                 Thing ally = allies.Current.thing;
@@ -385,7 +394,7 @@ namespace CombatAI.Comps
         ///     current sight coverage, use the map's full attack-target cache to find and pursue
         ///     enemies that are outside CAI's sight range.
         /// </summary>
-        /// <returns>True if a pursuit job was issued.</returns>
+        /// <returns>True if a pursuit job was issued or refreshed.</returns>
         private bool TrySearchAndDestroy()
         {
             bool isMelee = selPawn.CurrentEffectiveVerb?.IsMeleeAttack ?? (selPawn.equipment?.Primary == null || selPawn.equipment.Primary.def.IsMeleeWeapon);
@@ -394,7 +403,22 @@ namespace CombatAI.Comps
             Map map = selPawn.Map;
             if (map == null) return false;
             float bodySize = selPawn.RaceProps.baseBodySize;
-            if (data.InterruptedRecently((int)(30 * bodySize))) return false;
+            int tick = GenTicks.TicksGame;
+            Job currentJob = selPawn.CurJob;
+            bool ownsPursuit = currentJob != null && currentJob.loadID == searchAndDestroyJobId && currentJob.Is(JobDefOf.Goto);
+            if (ownsPursuit && searchAndDestroyTarget != null && searchAndDestroyTarget.Spawned
+                && searchAndDestroyTarget.Map == map && currentJob.targetA.IsValid
+                && !(searchAndDestroyTarget is Pawn pursuedPawn && (pursuedPawn.Dead || pursuedPawn.Downed))
+                && tick - lastSearchAndDestroyTick < Math.Max(45, (int)(30 * bodySize)))
+            {
+                // Keeping the job must not increase map-wide target searches after the normal
+                // interruption cooldown elapses. Reconsider targets on the previous search cadence.
+                currentJob.expiryInterval = tick - currentJob.startTick + 60;
+                return true;
+            }
+            bool interruptedRecently = data.InterruptedRecently((int)(30 * bodySize));
+            if (interruptedRecently) return false;
+            lastSearchAndDestroyTick = tick;
 
             MapComponent_FogGrid fogComp = Finder.Settings.FogOfWar_Enabled
                 ? map.GetComponent<MapComponent_FogGrid>()
@@ -446,6 +470,14 @@ namespace CombatAI.Comps
                 }
             }
 
+            currentJob = selPawn.CurJob;
+            if (currentJob != null && currentJob.loadID == searchAndDestroyJobId && searchAndDestroyTarget == bestTarget
+                && currentJob.Is(JobDefOf.Goto) && currentJob.targetA == gotoTarget)
+            {
+                // Job expiry is relative to startTick. Extend the deadline without restarting its path.
+                currentJob.expiryInterval = GenTicks.TicksGame - currentJob.startTick + 60;
+                return true;
+            }
             Job gotoJob = JobMaker.MakeJob(JobDefOf.Goto, gotoTarget);
             gotoJob.expiryInterval        = 60;
             gotoJob.checkOverrideOnExpire = true;
@@ -453,6 +485,9 @@ namespace CombatAI.Comps
             gotoJob.locomotionUrgency     = Finder.Settings.Enable_Sprinting ? LocomotionUrgency.Sprint : LocomotionUrgency.Jog;
             selPawn.jobs.ClearQueuedJobs();
             selPawn.jobs.StartJob(gotoJob, JobCondition.InterruptForced);
+            // Jobs are pooled; the loadID identifies this allocation rather than the reused object.
+            searchAndDestroyJobId = gotoJob.loadID;
+            searchAndDestroyTarget = bestTarget;
             data.LastInterrupted = GenTicks.TicksGame;
             return true;
         }
@@ -487,43 +522,19 @@ namespace CombatAI.Comps
 
             if (!needsEvade)
             {
-                List<Thing> fires = map.listerThings.ThingsInGroup(ThingRequestGroup.Fire);
-                for (int fi = 0; fi < fires.Count; fi++)
+                if (AreaThreats.TryFindNearbyFire(map, selPos, out IntVec3 fireCell))
                 {
-                    if (fires[fi].Position.DistanceToSquared(selPos) <= 9f)
-                    {
-                        needsEvade   = true;
-                        threatCenter = fires[fi].Position;
-                        evadeRadius  = 5f;  // step out of the fire
-                        break;
-                    }
+                    needsEvade   = true;
+                    threatCenter = fireCell;
+                    evadeRadius  = 5f;  // step out of the fire
                 }
             }
 
-            if (!needsEvade)
+            if (!needsEvade && AreaThreats.TryFindIncomingProjectile(selPawn, out IntVec3 landingCell, out float dangerRadius))
             {
-                List<Thing> projectiles = map.listerThings.ThingsInGroup(ThingRequestGroup.Projectile);
-                for (int pi = 0; pi < projectiles.Count; pi++)
-                {
-                    if (!(projectiles[pi] is Projectile proj)) continue;
-                    // Ignore friendly projectiles
-                    if (proj.Launcher?.Faction != null && !proj.Launcher.Faction.HostileTo(selPawn.Faction)) continue;
-                    ThingDef pd = proj.def;
-                    if (pd?.projectile == null) continue;
-                    if (!pd.projectile.flyOverhead && pd.projectile.explosionRadius <= 0f) continue;
-                    float dangerRadius = pd.projectile.explosionRadius + 4f;
-                    // Use intendedTarget then usedTarget to find the landing zone
-                    LocalTargetInfo lti = proj.intendedTarget.IsValid ? proj.intendedTarget : proj.usedTarget;
-                    if (!lti.IsValid) continue;
-                    IntVec3 lz = lti.HasThing ? lti.Thing.Position : lti.Cell;
-                    if (lz.DistanceTo(selPos) < dangerRadius)
-                    {
-                        needsEvade   = true;
-                        threatCenter = lz;
-                        evadeRadius  = dangerRadius + 2f;  // clear the blast radius with a small margin
-                        break;
-                    }
-                }
+                needsEvade   = true;
+                threatCenter = landingCell;
+                evadeRadius  = dangerRadius + 2f;
             }
 
             if (!needsEvade) return false;
@@ -536,7 +547,7 @@ namespace CombatAI.Comps
             request.checkBlockChance   = false;
             if (rangedEnemiesTargetingSelf.Count > 0)
             {
-                request.majorThreats = new List<Thing>(rangedEnemiesTargetingSelf);
+                request.majorThreats = rangedEnemiesTargetingSelf;
             }
             if (CoverPositionFinder.TryFindRetreatPosition(request, out IntVec3 safeCell) && safeCell != selPos
                 && IsMechanoidDestValid(safeCell))
@@ -575,6 +586,11 @@ namespace CombatAI.Comps
             allEnemies.Clear();
             escorts.Clear();
             rangedEnemiesTargetingSelf.Clear();
+            focusFireCandidates?.Clear();
+            focusFireAllyCounts?.Clear();
+            searchAndDestroyJobId = -1;
+            lastSearchAndDestroyTick = -1;
+            searchAndDestroyTarget = null;
             sapperNodes.Clear();
             aggroTarget = LocalTargetInfo.Invalid;
             data?.PostDeSpawn();
@@ -788,6 +804,11 @@ namespace CombatAI.Comps
                 return;
             }
             scanning = false;
+            if (searchAndDestroyTarget != null && selPawn.CurJob?.loadID != searchAndDestroyJobId)
+            {
+                searchAndDestroyJobId = -1;
+                searchAndDestroyTarget = null;
+            }
             // set enemies.
             data.ReSetEnemies(allEnemies);
             // set allies.
@@ -965,7 +986,7 @@ namespace CombatAI.Comps
                     request.caster             = selPawn;
                     request.target             = rangedEnemiesTargetingSelf[0];
                     request.verb               = verb;
-                    request.majorThreats       = new List<Thing>(rangedEnemiesTargetingSelf);
+                    request.majorThreats       = rangedEnemiesTargetingSelf;
                     request.checkBlockChance   = true;
                     request.maxRangeFromCaster = Mathf.Clamp(verb.EffectiveRange * 0.3f, 6f, 14f);
                     IntVec3 cell  = default;
@@ -1002,6 +1023,11 @@ namespace CombatAI.Comps
             {
                 return;
             }
+            if (IsAIAutoControlled)
+            {
+                focusFireCandidates ??= new List<Thing>();
+                focusFireCandidates.Clear();
+            }
             bool  bestEnemyVisibleNow  = false;
             bool  bestEnemyVisibleSoon = false;
             ulong selFlags             = selPawn.GetThingFlags();
@@ -1009,7 +1035,7 @@ namespace CombatAI.Comps
             progress = 210;
             // A not fast check will check for retreat and for reactions to enemies that are visible or soon to be visible.
             // A fast check will check only for retreat.
-            IEnumerator<AIEnvAgentInfo> enumerator = data.Enemies();
+            var enumerator = data.EnumerateEnemies();
             while (enumerator.MoveNext())
             {
                 progress = 301;
@@ -1030,6 +1056,7 @@ namespace CombatAI.Comps
                     {
                         // For debugging and logging.
                         progress = 311;
+                        if (IsAIAutoControlled) focusFireCandidates.Add(info.thing);
                         if (!bestEnemyVisibleNow)
                         {
                             nearestEnemy        = null;
@@ -1225,12 +1252,13 @@ namespace CombatAI.Comps
                 rangedEnemiesTargetingSelf.Remove(nearestEnemy);
             }
             // For AutoControl pawns: override nearestEnemy with the best focus-fire target.
-            if (IsAIAutoControlled && TryGetFocusFireTarget(selFlags, verb, out Thing focusTarget))
+            if (IsAIAutoControlled && TryGetFocusFireTarget(out Thing focusTarget))
             {
                 nearestEnemy        = focusTarget;
                 nearestEnemyDist    = selPawn.DistanceTo_Fast(focusTarget);
                 bestEnemyVisibleNow = true;
             }
+            focusFireCandidates?.Clear();
             progress = 500;
             // For AI auto-controlled pawns, don't retreat from enemies that are already fleeing/retreating.
             bool meleeThreatRetreating = IsAIAutoControlled && IsEnemyRetreating(nearestMeleeEnemy);
@@ -1248,7 +1276,7 @@ namespace CombatAI.Comps
                 request.caster             = selPawn;
                 request.target             = nearestMeleeEnemy;
                 request.verb               = verb;
-                request.majorThreats       = new List<Thing>(rangedEnemiesTargetingSelf);
+                request.majorThreats       = rangedEnemiesTargetingSelf;
                 request.checkBlockChance   = true;
                 request.maxRangeFromCaster = Mathf.Clamp(verb.EffectiveRange * 0.3f, 8f, 12f);
                 IntVec3 cell = default(IntVec3);
@@ -1375,7 +1403,7 @@ namespace CombatAI.Comps
                     progress = 521;
                     int                         shootingNum      = 0;
                     int                         rangedNum        = 0;
-                    IEnumerator<AIEnvAgentInfo> enumeratorAllies = data.Allies();
+                    var enumeratorAllies = data.EnumerateAllies();
                     while (enumeratorAllies.MoveNext())
                     {
                         AIEnvAgentInfo info = enumeratorAllies.Current;
@@ -1445,10 +1473,9 @@ namespace CombatAI.Comps
                             int threatCount = rangedEnemiesTargetingSelf.Count;
                             if (threatCount > 0)
                             {
-                                Thing[] snapshot = rangedEnemiesTargetingSelf.ToArray();
                                 for (int i = 0; i < threatCount; i++)
                                 {
-                                    request.majorThreats.Add(snapshot[Math.Abs(Rand.Int) % threatCount]);
+                                    request.majorThreats.Add(rangedEnemiesTargetingSelf[Math.Abs(Rand.Int) % threatCount]);
                                 }
                             }
                             request.maxRangeFromCaster = Maths.Min(verb.EffectiveRange, 10f) + distOffset;
@@ -1529,7 +1556,7 @@ namespace CombatAI.Comps
             bool    bestEnemyIsRanged             = false;
             bool    bestEnemyIsMeleeAttackingAlly = false;
             // TODO create melee reactions.
-            IEnumerator<AIEnvAgentInfo> enumeratorEnemies = data.EnemiesWhere(AIEnvAgentState.nearby);
+            var enumeratorEnemies = data.EnumerateEnemiesWhere(AIEnvAgentState.nearby);
             // For debugging and logging.
             progress = 202;
             while (enumeratorEnemies.MoveNext())
@@ -1659,7 +1686,7 @@ namespace CombatAI.Comps
 
             // Priority 2 — COUNT nearby enemies to detect crowd density
             int nearbyEnemyCount = 0;
-            IEnumerator<AIEnvAgentInfo> densityEnum = data.EnemiesWhere(AIEnvAgentState.nearby);
+            var densityEnum = data.EnumerateEnemiesWhere(AIEnvAgentState.nearby);
             while (densityEnum.MoveNext())
             {
                 AIEnvAgentInfo di = densityEnum.Current;
@@ -1731,7 +1758,7 @@ namespace CombatAI.Comps
             if (Finder.Settings.Debug && Finder.Settings.Debug_ValidateSight)
             {
                 _visibleEnemies.Clear();
-                IEnumerator<AIEnvAgentInfo> enumerator = data.Enemies();
+                var enumerator = data.EnumerateEnemies();
                 while (enumerator.MoveNext())
                 {
                     AIEnvAgentInfo info = enumerator.Current;
@@ -1805,7 +1832,7 @@ namespace CombatAI.Comps
                     CoverPositionRequest request = new CoverPositionRequest();
                     request.caster             = selPawn;
                     request.target             = nearestMeleeEnemy;
-                    request.majorThreats       = new List<Thing>(rangedEnemiesTargetingSelf);
+                    request.majorThreats       = rangedEnemiesTargetingSelf;
                     request.maxRangeFromCaster = 12;
                     request.checkBlockChance   = true;
                     IntVec3 cell = default(IntVec3);
@@ -1862,7 +1889,7 @@ namespace CombatAI.Comps
                     // selPawn.Map.debugDrawer.FlashCell(selPos, 1.0f, $"{possibleDmg}, {targetedBy.Count}, {rangedEnemiesTargetingSelf.Count}");
                     CoverPositionRequest request = new CoverPositionRequest();
                     request.caster             = selPawn;
-                    request.majorThreats       = new List<Thing>(rangedEnemiesTargetingSelf);
+                    request.majorThreats       = rangedEnemiesTargetingSelf;
                     request.checkBlockChance   = true;
                     request.maxRangeFromCaster = Mathf.Clamp(possibleDmgWarmup * 5f - rangedEnemiesTargetingSelf.Count, 4f, 8f);
                     IntVec3 cell = default(IntVec3);
@@ -2010,7 +2037,7 @@ namespace CombatAI.Comps
                 {
                     data.AgroSig = sig;
                     // aggro nearby Allies
-                    IEnumerator<AIEnvAgentInfo> allies = data.AlliesNearBy();
+                    var allies = data.EnumerateAlliesNearBy();
                     while (allies.MoveNext())
                     {
                         AIEnvAgentInfo ally = allies.Current;

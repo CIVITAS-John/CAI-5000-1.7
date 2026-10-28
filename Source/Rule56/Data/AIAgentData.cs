@@ -167,21 +167,41 @@ namespace CombatAI
         {
             return enemies.GetEnumerator(AIEnvAgentState.visible);
         }
+        public AIEnvThings.Enumerator EnumerateEnemiesVisible()
+        {
+            return enemies.GetFastEnumerator(AIEnvAgentState.visible);
+        }
         public IEnumerator<AIEnvAgentInfo> EnemiesNearBy()
         {
             return enemies.GetEnumerator(AIEnvAgentState.visible);
+        }
+        public AIEnvThings.Enumerator EnumerateEnemiesNearBy()
+        {
+            return enemies.GetFastEnumerator(AIEnvAgentState.visible);
         }
         public IEnumerator<AIEnvAgentInfo> Enemies()
         {
             return enemies.GetEnumerator(AIEnvAgentState.unknown);
         }
+        public AIEnvThings.Enumerator EnumerateEnemies()
+        {
+            return enemies.GetFastEnumerator(AIEnvAgentState.unknown);
+        }
         public IEnumerator<AIEnvAgentInfo> MeleeEnemiesNearBy()
         {
             return enemies.GetEnumerator(AIEnvAgentState.melee & AIEnvAgentState.melee);
         }
+        public AIEnvThings.Enumerator EnumerateMeleeEnemiesNearBy()
+        {
+            return enemies.GetFastEnumerator(AIEnvAgentState.melee & AIEnvAgentState.melee);
+        }
         public IEnumerator<AIEnvAgentInfo> EnemiesWhere(AIEnvAgentState customState)
         {
             return enemies.GetEnumerator(customState);
+        }
+        public AIEnvThings.Enumerator EnumerateEnemiesWhere(AIEnvAgentState customState)
+        {
+            return enemies.GetFastEnumerator(customState);
         }
         public void ReSetEnemies(HashSet<AIEnvAgentInfo> items)
         {
@@ -213,13 +233,25 @@ namespace CombatAI
         {
             return allies.GetEnumerator(AIEnvAgentState.nearby);
         }
+        public AIEnvThings.Enumerator EnumerateAlliesNearBy()
+        {
+            return allies.GetFastEnumerator(AIEnvAgentState.nearby);
+        }
         public IEnumerator<AIEnvAgentInfo> Allies()
         {
             return allies.GetEnumerator(AIEnvAgentState.unknown);
         }
+        public AIEnvThings.Enumerator EnumerateAllies()
+        {
+            return allies.GetFastEnumerator(AIEnvAgentState.unknown);
+        }
         public IEnumerator<AIEnvAgentInfo> AlliesWhere(AIEnvAgentState customState)
         {
             return allies.GetEnumerator(customState);
+        }
+        public AIEnvThings.Enumerator EnumerateAlliesWhere(AIEnvAgentState customState)
+        {
+            return allies.GetFastEnumerator(customState);
         }
         public void ReSetAllies(HashSet<AIEnvAgentInfo> items)
         {

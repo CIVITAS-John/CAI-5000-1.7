@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using UnityEngine;
 using Verse;
@@ -367,49 +369,83 @@ namespace CombatAI.Compatibility
 
     public static class NeedCompat
     {
+        private static readonly ConcurrentDictionary<Type, Func<Need, long>> getters = new ConcurrentDictionary<Type, Func<Need, long>>();
+
         public static long GetLastRestTick(Need need)
         {
-            if (need == null) return 0;
-            var t = need.GetType();
-            var f = t.GetField("lastRestTick", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (f != null)
+            return need == null ? 0 : getters.GetOrAdd(need.GetType(), CreateGetter)(need);
+        }
+
+        private static Func<Need, long> CreateGetter(Type type)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var instance = Expression.Parameter(typeof(Need), "need");
+            var target = Expression.Convert(instance, type);
+            var field = type.GetField("lastRestTick", flags);
+            Expression body;
+            if (field != null && (field.FieldType == typeof(long) || field.FieldType == typeof(int)))
             {
-                var v = f.GetValue(need);
-                if (v is long l) return l;
-                if (v is int i) return i;
+                body = Expression.Convert(Expression.Field(target, field), typeof(long));
             }
-            var p = t.GetProperty("LastRestTick", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (p != null)
+            else
             {
-                var v = p.GetValue(need);
-                if (v is long l2) return l2;
-                if (v is int i2) return i2;
+                var property = type.GetProperty("LastRestTick", flags);
+                body = property == null ? Expression.Constant(0L) : ReadTick(Expression.Property(target, property), Expression.Constant(0L));
+                if (field != null) body = ReadTick(Expression.Field(target, field), body);
             }
-            return 0;
+            // Cache the missing-member fallback too, and read the value afresh on every call.
+            return Expression.Lambda<Func<Need, long>>(body, instance).Compile();
+        }
+
+        private static Expression ReadTick(Expression value, Expression fallback)
+        {
+            if (value.Type == typeof(long) || value.Type == typeof(int)) return Expression.Convert(value, typeof(long));
+            // Some mod members declare object; retain the runtime int/long checks and fallback order.
+            var boxed = Expression.Variable(typeof(object), "value");
+            return Expression.Block(new[] { boxed },
+                Expression.Assign(boxed, Expression.Convert(value, typeof(object))),
+                Expression.Condition(Expression.TypeIs(boxed, typeof(long)), Expression.Convert(boxed, typeof(long)),
+                    Expression.Condition(Expression.TypeIs(boxed, typeof(int)), Expression.Convert(Expression.Convert(boxed, typeof(int)), typeof(long)), fallback)));
         }
     }
 
     public static class PawnPathCompatExtras
     {
+        private static readonly ConcurrentDictionary<Type, Func<Pawn_PathFollower, bool>> getters = new ConcurrentDictionary<Type, Func<Pawn_PathFollower, bool>>();
+
         public static bool IsPawnMoving(Pawn pawn)
         {
-            if (pawn == null) return false;
-            var pather = pawn.pather;
-            if (pather == null) return false;
-            var t = pather.GetType();
-            var p = t.GetProperty("MovingNow", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (p != null)
+            var pather = pawn?.pather;
+            return pather != null && getters.GetOrAdd(pather.GetType(), CreateGetter)(pather);
+        }
+
+        private static Func<Pawn_PathFollower, bool> CreateGetter(Type type)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var instance = Expression.Parameter(typeof(Pawn_PathFollower), "pather");
+            var target = Expression.Convert(instance, type);
+            var property = type.GetProperty("MovingNow", flags);
+            Expression body;
+            if (property != null && property.PropertyType == typeof(bool))
             {
-                var v = p.GetValue(pather);
-                if (v is bool b) return b;
+                body = Expression.Property(target, property);
             }
-            var f = t.GetField("moving", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (f != null)
+            else
             {
-                var v = f.GetValue(pather);
-                if (v is bool b2) return b2;
+                var field = type.GetField("moving", flags);
+                body = field == null ? Expression.Constant(false) : ReadMoving(Expression.Field(target, field), Expression.Constant(false));
+                if (property != null) body = ReadMoving(Expression.Property(target, property), body);
             }
-            return false;
+            return Expression.Lambda<Func<Pawn_PathFollower, bool>>(body, instance).Compile();
+        }
+
+        private static Expression ReadMoving(Expression value, Expression fallback)
+        {
+            if (value.Type == typeof(bool)) return value;
+            var boxed = Expression.Variable(typeof(object), "value");
+            return Expression.Block(new[] { boxed },
+                Expression.Assign(boxed, Expression.Convert(value, typeof(object))),
+                Expression.Condition(Expression.TypeIs(boxed, typeof(bool)), Expression.Convert(boxed, typeof(bool)), fallback));
         }
     }
 

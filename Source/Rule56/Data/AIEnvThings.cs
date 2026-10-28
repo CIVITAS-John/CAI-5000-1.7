@@ -202,39 +202,59 @@ namespace CombatAI
             return new AIThingEnum(elements, state);
         }
 
+        // Internal hot paths use the concrete return type to avoid allocating or boxing.
+        public Enumerator GetFastEnumerator(AIEnvAgentState state = invalidState)
+        {
+            return new Enumerator(elements, state);
+        }
+
+        // Preserve the public reference enumerator for callers compiled against older versions.
         public class AIThingEnum : IEnumerator<AIEnvAgentInfo>
         {
             public readonly List<AIEnvAgentInfo> _items;
-            public readonly AIEnvAgentState      _state;
-
-            private int index = -1;
+            public readonly AIEnvAgentState _state;
+            private Enumerator enumerator;
 
             public AIThingEnum(List<AIEnvAgentInfo> items, AIEnvAgentState state)
             {
                 _items = items;
                 _state = state;
+                enumerator = new Enumerator(items, state);
             }
 
-            public void Dispose()
+            public void Dispose() { }
+            public bool MoveNext() => enumerator.MoveNext();
+            public void Reset() => enumerator.Reset();
+            public AIEnvAgentInfo Current => enumerator.Current;
+            object IEnumerator.Current => Current;
+        }
+
+        public struct Enumerator : IEnumerator<AIEnvAgentInfo>
+        {
+            private readonly List<AIEnvAgentInfo> items;
+            private readonly AIEnvAgentState state;
+            private int index;
+
+            public Enumerator(List<AIEnvAgentInfo> items, AIEnvAgentState state)
             {
+                this.items = items;
+                this.state = state;
+                index = -1;
             }
+
+            public void Dispose() { }
 
             public bool MoveNext()
             {
-                if (_state == invalidState)
+                while (++index < items.Count)
                 {
-                    return MoveNextInternal();
-                }
-                while (MoveNextInternal())
-                {
-                    if ((_items[index].state & _state) == _state)
+                    if (state == invalidState || (items[index].state & state) == state)
                     {
                         return true;
                     }
                 }
                 return false;
             }
-
 
             public void Reset()
             {
@@ -244,21 +264,10 @@ namespace CombatAI
             public AIEnvAgentInfo Current
             {
                 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => _items[index];
+                get => items[index];
             }
 
-            object IEnumerator.Current
-            {
-                [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                get => Current;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private bool MoveNextInternal()
-            {
-                index++;
-                return index < _items.Count;
-            }
+            object IEnumerator.Current => Current;
         }
     }
 }
