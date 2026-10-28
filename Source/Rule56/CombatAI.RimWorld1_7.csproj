@@ -9,7 +9,8 @@
     <EnableDefaultItems>false</EnableDefaultItems>
     <GenerateDependencyFile>false</GenerateDependencyFile>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <OutputPath>../../1.7/Assemblies/</OutputPath>
+    <OutputPath>bin/$(Configuration)/</OutputPath>
+    <OutputPath Condition="'$(Configuration)' == 'Release'">../../1.7/Assemblies/</OutputPath>
     <RimWorldDir Condition="'$(RimWorldDir)' == ''">$(MSBuildThisFileDirectory)../../../../</RimWorldDir>
     <RimWorldManagedDir Condition="'$(RimWorldManagedDir)' == ''">$(RimWorldDir)RimWorld.app/Contents/MacOS/</RimWorldManagedDir>
     <HarmonyAssembly Condition="'$(HarmonyAssembly)' == ''">$(RimWorldDir)../../workshop/content/294100/2009463077/1.7/Assemblies/0Harmony.dll</HarmonyAssembly>

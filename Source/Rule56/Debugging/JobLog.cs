@@ -51,20 +51,7 @@ namespace CombatAI
             {
                 ThinkNodeDatabase.GetTrace(jobGiver, pawn, log.thinknode);
             }
-            // reset builder
-            StackTrace trace = new StackTrace();
-            // fill stacktrace
-            log.stacktrace = new List<string>();
-            foreach (StackFrame frame in trace.GetFrames())
-            {
-                MethodBase method = frame.GetMethod();
-                Type       type   = method.DeclaringType;
-                if (typeof(Root).IsAssignableFrom(type))
-                {
-                    break;
-                }
-                log.stacktrace.Add("{0}.{1}:{2}".Formatted(type.Namespace, type.Name, method.Name));
-            }
+            log.stacktrace = CaptureStackTrace(new StackTrace());
             log.timestamp = GenTicks.TicksGame;
             return log;
         }
@@ -82,22 +69,23 @@ namespace CombatAI
             {
                 jobGiverTag
             };
-            // reset builder
-            StackTrace trace = new StackTrace();
-            // fill stacktrace
-            log.stacktrace = new List<string>();
+            log.stacktrace = CaptureStackTrace(new StackTrace());
+            log.timestamp = GenTicks.TicksGame;
+            return log;
+        }
+
+        private static List<string> CaptureStackTrace(StackTrace trace)
+        {
+            List<string> frames = new List<string>();
             foreach (StackFrame frame in trace.GetFrames())
             {
                 MethodBase method = frame.GetMethod();
-                Type       type   = method.DeclaringType;
-                if (typeof(Root).IsAssignableFrom(type))
-                {
-                    break;
-                }
-                log.stacktrace.Add("{0}.{1}:{2}".Formatted(type.Namespace, type.Name, method.Name));
+                if (method == null) continue;
+                Type type = method.DeclaringType;
+                if (type != null && typeof(Root).IsAssignableFrom(type)) break;
+                frames.Add(type == null ? method.Name : "{0}.{1}:{2}".Formatted(type.Namespace, type.Name, method.Name));
             }
-            log.timestamp = GenTicks.TicksGame;
-            return log;
+            return frames;
         }
 
         public override string ToString()

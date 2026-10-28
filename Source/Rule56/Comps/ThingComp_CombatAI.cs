@@ -2561,7 +2561,8 @@ namespace CombatAI.Comps
         public override void PostExposeData()
         {
             base.PostExposeData();
-            if (Finder.Settings.Debug)
+            // Personality is diagnostic output; faction references may not exist while loading.
+            if (Finder.Settings.Debug && Scribe.mode == LoadSaveMode.Saving)
             {
                 PersonalityTacker.PersonalityResult personality = parent.GetCombatPersonality();
                 Scribe_Deep.Look(ref personality, "personality");

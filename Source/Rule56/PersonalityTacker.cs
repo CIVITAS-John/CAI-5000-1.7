@@ -31,7 +31,7 @@ namespace CombatAI
 		{
 			if (faction == null)
 			{
-				PersonalityResult.From(Finder.Settings.GetTechSettings(TechLevel.Undefined));
+				return PersonalityResult.From(Finder.Settings.GetTechSettings(TechLevel.Undefined));
 			}
 			if (faction.leader == null || !Finder.Settings.Personalities_Enabled)
 			{

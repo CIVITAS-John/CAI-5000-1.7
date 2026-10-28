@@ -97,6 +97,10 @@ namespace CombatAI
         public SightPerformanceSettings SightSettings_SettlementTurrets    = new SightPerformanceSettings(3, 15, 12);
         public bool                     Targeter_Enabled                   = true;
 
+        public Settings()
+        {
+            ResetTechSettings();
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public DefKindAISettings GetDefKindSettings(Pawn pawn)
