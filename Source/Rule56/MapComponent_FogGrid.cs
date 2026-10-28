@@ -34,7 +34,7 @@ namespace CombatAI
 		private readonly List<Vector3> spotBuffer;
 
 		private readonly HashSet<ITempSpot> spotsQueued;
-		private          bool               alive;
+		private volatile bool               alive;
 		public           CellIndices        cellIndices;
 		public           GlowGrid           glow;
 
@@ -52,7 +52,7 @@ namespace CombatAI
 		private bool   vanillaRebuildPending;
 
 		private          Rect      mapScreenRect;
-		private          bool      ready;
+		private volatile bool      ready;
 		public           SightGrid sight;
 		private volatile int       ticksGame;
 		private volatile float     tickRateMultiplier;
@@ -188,6 +188,7 @@ namespace CombatAI
 		}
 		public bool IsFogged(int index)
 		{
+			if (!SightUtility.SupportsMap(map)) return false;
 			if (!Finder.Settings.FogOfWar_Enabled)
 			{
 				return false;
@@ -279,6 +280,7 @@ namespace CombatAI
 
 		public void RecomputeOnceMainThread()
 		{
+			if (!SightUtility.SupportsMap(map)) return;
 			if (!ready)
 			{
 				sight = map.GetComp_Fast<SightTracker>()?.colonistsAndFriendlies;
@@ -306,6 +308,7 @@ namespace CombatAI
 
 		public void ApplyVanillaUnexploredOverlay()
 		{
+			if (!SightUtility.SupportsMap(map)) return;
 			try
 			{
 				InitializeFogStateFromVanilla();
@@ -373,6 +376,7 @@ namespace CombatAI
 
 		public void ReinitializeFogFromScratch()
 		{
+			if (!SightUtility.SupportsMap(map)) return;
 			if (map?.fogGrid == null) return;
 			try
 			{
@@ -665,6 +669,7 @@ namespace CombatAI
 
 		public override void MapComponentUpdate()
 		{
+			if (!SightUtility.SupportsMap(map)) return;
 			// Cache map.IsPlayerHome on main thread so off-thread code can safely read it.
 			try { _cachedIsPlayerHome = map.IsPlayerHome; } catch { }
 			if (Finder.Settings.FogOfWar_Enabled && !previousFogEnabled)
@@ -820,7 +825,7 @@ namespace CombatAI
 		{
 			Stopwatch       stopwatch = new Stopwatch();
 			List<ITempSpot> spots     = new List<ITempSpot>();
-			while (alive)
+			while (alive && asyncActions.Alive)
 			{
 				stopwatch.Restart();
 				if (ready && Finder.Settings.FogOfWar_Enabled)
@@ -887,7 +892,6 @@ namespace CombatAI
 						backgroundNextV++;
 						if (backgroundNextV >= totalV) { backgroundNextV = 0; backgroundNextU++; }
 					}
-					stopwatch.Stop();
 					float elapsed = (float)stopwatch.ElapsedTicks / Stopwatch.Frequency;
 					float multiplier = tickRateMultiplier;
 					if (multiplier < 1f) multiplier = 1f;
@@ -895,17 +899,8 @@ namespace CombatAI
 					float remaining = frameTarget - elapsed;
 					if (remaining > 0f)
 					{
-						// If remaining is sizeable, sleep most of it then spin-wait for precision
-						if (remaining > 0.005f)
-						{
-							int sleepMs = Mathf.FloorToInt((remaining - 0.003f) * 1000f);
-							if (sleepMs > 0) Thread.Sleep(sleepMs);
-						}
-						// busy-wait until target reached (short duration)
-						while (((float)stopwatch.ElapsedTicks / Stopwatch.Frequency) < frameTarget)
-						{
-							Thread.SpinWait(10);
-						}
+						// Pace the worker with a bounded sleep; a stopped timer must never gate progress.
+						Thread.Sleep(Mathf.CeilToInt(remaining * 1000f));
 					}
 				}
 				else

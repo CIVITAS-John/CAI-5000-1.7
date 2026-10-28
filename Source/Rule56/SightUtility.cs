@@ -8,6 +8,12 @@ namespace CombatAI
 {
     public static class SightUtility
     {
+        /// <summary>Rectangular maps, including vehicle interiors, cannot use the square-grid fallback.</summary>
+        internal static bool SupportsMap(Map map)
+        {
+            return map != null && map.Size.x == map.Size.z;
+        }
+
 	    public static float GetSightRadius_Fast(Thing thing)
 	    {
 		    if (!TKVCache<Thing, SightGrid.ISightRadius, float>.TryGet(thing, out float val, 12000))

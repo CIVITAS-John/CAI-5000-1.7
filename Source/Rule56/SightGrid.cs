@@ -15,6 +15,28 @@ namespace CombatAI
 		private readonly IBuckets<IBucketableThing> buckets;
 		private readonly List<Vector3>              buffer = new List<Vector3>(1024);
 		private readonly CellFlooder                flooder;
+		// Cached visitors are invoked synchronously on this grid's single worker.
+		private readonly Action<IntVec3, int, int, float> setSightCell;
+		private readonly Action<CellFlooder.Node> setNearbyCell;
+		private SightScanState sightScan;
+
+		/// <summary>Mutable visitor state owned only by this grid's worker during a synchronous scan.</summary>
+		private struct SightScanState
+		{
+			public IBucketableThing item;
+			public SightTracker.SightReader reader;
+			public IntVec3 pos;
+			public Vector3 drawPos;
+			public bool engagedInMelee;
+			public bool scanForEnemies;
+			public float r_fade;
+			public float d_fade;
+			public float rSqr_sight;
+			public float rSqr_scan;
+			public float rSqr_fog;
+			public float rSqr_fade;
+			public MapComponent_FogGrid fogComp;
+		}
 		/// <summary>
 		///     Sight grid contains all sight data.
 		/// </summary>
@@ -112,6 +134,8 @@ namespace CombatAI
 			suRect_Combatant.maxZ = 0;
 			suRectPrev_Combatant  = CellRect.Empty;
 			flooder               = new CellFlooder(map);
+			setSightCell          = SetSightCell;
+			setNearbyCell         = SetNearbyCell;
 		}
 		/// <summary>
 		///     Tracks the number of factions tracked.
@@ -400,6 +424,88 @@ namespace CombatAI
 			return item.thing.GetThingFlags();
 		}
 
+		private void SetSightCell(IntVec3 cell, int carry, int dist, float coverRating)
+		{
+			float d2         = sightScan.pos.DistanceToSquared(cell);
+			float visibility = 0f;
+			if (!sightScan.engagedInMelee)
+			{
+				if (d2 < sightScan.rSqr_sight)
+				{
+					visibility = Maths.Max(1f - coverRating, 0.20f);
+					if (visibility > 0f)
+					{
+						grid.Set(cell, visibility, new Vector2(cell.x - sightScan.pos.x, cell.z - sightScan.pos.z));
+						grid_regions.Set(cell);
+					}
+				}
+				else if (d2 < 360)
+				{
+					grid.Set(cell, 0, new Vector2(cell.x - sightScan.pos.x, cell.z - sightScan.pos.z));
+					grid_regions.Set(cell);
+				}
+			}
+			if (playerAlliance && d2 < sightScan.rSqr_fog)
+			{
+				float d3 = Maths.Sqr(sightScan.drawPos.x - cell.x) + Maths.Sqr(sightScan.drawPos.z - cell.z);
+				float val;
+				if (d3 < sightScan.rSqr_fade)
+				{
+					val = 1f;
+				}
+				else
+				{
+					val = 1f - Mathf.Clamp01((Maths.Sqrt_Fast(d3, 5) - sightScan.r_fade) / sightScan.d_fade);
+				}
+				gridFog?.Set(cell, val);
+			}
+			if (sightScan.scanForEnemies && d2 < sightScan.rSqr_scan)
+			{
+				// Skip spotting if this cell is currently fogged for the player.
+				if (sightScan.fogComp != null && sightScan.fogComp.IsFogged(cell))
+				{
+					return;
+				}
+				ulong flag = sightScan.reader.GetStaticEnemyFlags(cell);
+				if (flag != 0)
+				{
+					ISpotRecord spotting = new ISpotRecord();
+					spotting.cell  = cell;
+					spotting.flag  = flag;
+					spotting.state = (int)AIEnvAgentState.visible;
+					spotting.score = visibility;
+					sightScan.item.spottings.Add(spotting);
+				}
+			}
+		}
+
+		private void SetNearbyCell(CellFlooder.Node node)
+		{
+			if (!grid.IsSet(node.cell))
+			{
+				grid.Set(node.cell, 0.198f, new Vector2(node.cell.x - node.parent.x, node.cell.z - node.parent.z));
+				grid_regions.Set(node.cell);
+			}
+			if (sightScan.scanForEnemies)
+			{
+				// Skip nearby spotting if node is fogged for player
+				if (sightScan.fogComp != null && sightScan.fogComp.IsFogged(node.cell))
+				{
+					return;
+				}
+				ulong flag = sightScan.reader.GetStaticEnemyFlags(node.cell) | sightScan.reader.GetStaticFriendlyFlags(node.cell);
+				if (flag != 0)
+				{
+					ISpotRecord spotting = new ISpotRecord();
+					spotting.cell  = node.cell;
+					spotting.flag  = flag;
+					spotting.state = (int)AIEnvAgentState.nearby;
+					spotting.score = node.distAbs;
+					sightScan.item.spottings.Add(spotting);
+				}
+			}
+		}
+
 		private bool TryCastSight(IBucketableThing item)
 		{
 			if (grid.CycleNum == item.lastCycle || Skip(item))
@@ -523,95 +629,41 @@ namespace CombatAI
 				grid.Next(pos, GetFlags(item), item.cachedDamage.adjustedSharp, item.cachedDamage.adjustedBlunt, attr);
 				grid_regions.Next();
 				var fogComp = map.GetComponent<MapComponent_FogGrid>();
-				Action<IntVec3, int, int, float> setAction = (cell, carry, dist, coverRating) =>
+				// Both visitors finish on this grid's single worker before the next cast starts.
+				// The queued main-thread continuation below keeps its own per-request closure.
+				sightScan = new SightScanState
 				{
-					float d2         = pos.DistanceToSquared(cell);
-					float visibility = 0f;
-					if (!engagedInMelee)
-					{
-						if (d2 < rSqr_sight)
-						{
-							visibility = Maths.Max(1f - coverRating, 0.20f);
-							if (visibility > 0f)
-							{
-								grid.Set(cell, visibility, new Vector2(cell.x - pos.x, cell.z - pos.z));
-								grid_regions.Set(cell);
-							}
-						}
-						else if (d2 < 360)
-						{
-							grid.Set(cell, 0, new Vector2(cell.x - pos.x, cell.z - pos.z));
-							grid_regions.Set(cell);
-						}
-					}
-					if (playerAlliance && d2 < rSqr_fog)
-					{
-						float d3 = Maths.Sqr(drawPos.x - cell.x) + Maths.Sqr(drawPos.z - cell.z);
-						float val;
-						if (d3 < rSqr_fade)
-						{
-							val = 1f;
-						}
-						else
-						{
-							val = 1f - Mathf.Clamp01((Maths.Sqrt_Fast(d3, 5) - r_fade) / d_fade);
-						}
-						gridFog?.Set(cell, val);
-					}
-					if (scanForEnemies && d2 < rSqr_scan)
-					{
-						// Skip spotting if this cell is currently fogged for the player.
-						if (fogComp != null && fogComp.IsFogged(cell))
-						{
-							return;
-						}
-						ulong flag = reader.GetStaticEnemyFlags(cell);
-						if (flag != 0)
-						{
-							ISpotRecord spotting = new ISpotRecord();
-							spotting.cell  = cell;
-							spotting.flag  = flag;
-							spotting.state = (int)AIEnvAgentState.visible;
-							spotting.score = visibility;
-							item.spottings.Add(spotting);
-						}
-					}
+					pos = pos,
+					drawPos = drawPos,
+					engagedInMelee = engagedInMelee,
+					scanForEnemies = scanForEnemies,
+					r_fade = r_fade,
+					d_fade = d_fade,
+					rSqr_sight = rSqr_sight,
+					rSqr_scan = rSqr_scan,
+					rSqr_fog = rSqr_fog,
+					rSqr_fade = rSqr_fade,
+					fogComp = fogComp,
+					reader = reader,
+					item = item,
 				};
-				if (item.CctvTop == null)
+				try
 				{
-					ShadowCastingUtility.CastWeighted(map, pos, setAction, Maths.Max(sightRadius.scan, sightRadius.fog, sightRadius.sight), settings.carryLimit, buffer);
-				}
-				else
-				{
-					ShadowCastingUtility.CastWeighted(map, pos, item.CctvTop.LookDirection, setAction, Maths.Max(sightRadius.scan, sightRadius.fog, sightRadius.sight), item.CctvTop.BaseWidth, settings.carryLimit, buffer);
-				}
-				grid.curRoot = IntVec3.Invalid;
-				flooder.Flood(origin, node =>
-				{
-					if (!grid.IsSet(node.cell))
+					if (item.CctvTop == null)
 					{
-						grid.Set(node.cell, 0.198f, new Vector2(node.cell.x - node.parent.x, node.cell.z - node.parent.z));
-						grid_regions.Set(node.cell);
+						ShadowCastingUtility.CastWeighted(map, pos, setSightCell, Maths.Max(sightRadius.scan, sightRadius.fog, sightRadius.sight), settings.carryLimit, buffer);
 					}
-					if (scanForEnemies)
+					else
 					{
-						// Skip nearby spotting if node is fogged for player
-						if (fogComp != null && fogComp.IsFogged(node.cell))
-						{
-							return;
-						}
-						ulong flag = reader.GetStaticEnemyFlags(node.cell) | reader.GetStaticFriendlyFlags(node.cell);
-						if (flag != 0)
-						{
-							ISpotRecord spotting = new ISpotRecord();
-							spotting.cell  = node.cell;
-							spotting.flag  = flag;
-							spotting.state = (int)AIEnvAgentState.nearby;
-							spotting.score = node.distAbs;
-							item.spottings.Add(spotting);
-						}
+						ShadowCastingUtility.CastWeighted(map, pos, item.CctvTop.LookDirection, setSightCell, Maths.Max(sightRadius.scan, sightRadius.fog, sightRadius.sight), item.CctvTop.BaseWidth, settings.carryLimit, buffer);
 					}
-				}, maxDist: defenseMode ? 32 : 12, maxCellNum: defenseMode ? 325 : 225, passThroughDoors: true);
+					grid.curRoot = IntVec3.Invalid;
+					flooder.Flood(origin, setNearbyCell, maxDist: defenseMode ? 32 : 12, maxCellNum: defenseMode ? 325 : 225, passThroughDoors: true);
+				}
+				finally
+				{
+					sightScan = default(SightScanState);
+				}
 				grid.Set(origin, 1.0f, new Vector2(origin.x - pos.x, origin.z - pos.z));
 				grid.Set(pos, 1.0f, new Vector2(origin.x - pos.x, origin.z - pos.z));
 				grid.Next(pos, GetFlags(item), 0, 0, item.cachedDamage.attributes);

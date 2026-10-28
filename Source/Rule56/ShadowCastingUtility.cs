@@ -21,6 +21,10 @@ namespace CombatAI
 
         private static readonly Vector3 InvalidOffset = new Vector3(0, -1, 0);
 
+        // Workers reuse their request and row storage. Taking the cached slot before scanning
+        // keeps a nested cast from overwriting the request currently being consumed.
+        [ThreadStatic] private static CastRequest cachedRequest;
+
         static ShadowCastingUtility()
         {
             _transformationFuncs = new Func<IntVec3, IntVec3>[4];
@@ -131,7 +135,7 @@ namespace CombatAI
                     Log.Error($"Wall grid not found for {request.map} with cast center {request.source}");
                 return;
             }
-            List<VisibleRow> rowQueue = new List<VisibleRow>();
+            List<VisibleRow> rowQueue = request.rows;
             rowQueue.Add(request.firstRow);
             float coverMinDist  = Maths.Min(Maths.Max(request.firstRow.maxDepth / 3f, 4f), 8f);
             float coverBlockInc = 1f / Maths.Max(request.firstRow.maxDepth, 1);
@@ -286,7 +290,7 @@ namespace CombatAI
                 Log.Error($"Wall grid not found for {request.map} with cast center {request.source}");
                 return;
             }
-            List<VisibleRow> rowQueue = new List<VisibleRow>();
+            List<VisibleRow> rowQueue = request.rows;
             rowQueue.Add(request.firstRow);
             while (rowQueue.Count > 0)
             {
@@ -394,7 +398,7 @@ namespace CombatAI
                 {
                     if (!leftBlocked)
                     {
-                        CastRequest requestLeft = new CastRequest();
+                        CastRequest requestLeft = RentRequest();
                         VisibleRow  arcLeft     = VisibleRow.First;
                         arcLeft.startSlope      = !Finder.Settings.LeanCE_Enabled ? startSlope : -1f / Maths.Max(maxDepth, 64);
                         arcLeft.endSlope        = endSlope;
@@ -409,11 +413,11 @@ namespace CombatAI
                         requestLeft.source      = leftLower;
                         requestLeft.buffer      = buffer;
                         requestLeft.setAction   = setAction;
-                        castAction(requestLeft);
+                        Scan(castAction, requestLeft);
                     }
                     if (!rightBlocked)
                     {
-                        CastRequest requestRight = new CastRequest();
+                        CastRequest requestRight = RentRequest();
                         VisibleRow  arcRight     = VisibleRow.First;
                         arcRight.startSlope      = startSlope;
                         arcRight.endSlope        = !Finder.Settings.LeanCE_Enabled ? endSlope : 1f / Maths.Max(maxDepth, 64);
@@ -428,13 +432,13 @@ namespace CombatAI
                         requestRight.source      = rightLower;
                         requestRight.setAction   = setAction;
                         requestRight.buffer      = buffer;
-                        castAction(requestRight);
+                        Scan(castAction, requestRight);
                     }
                 }
             }
             else
             {
-                CastRequest request = new CastRequest();
+                CastRequest request = RentRequest();
                 VisibleRow  arc     = VisibleRow.First;
                 arc.startSlope      = startSlope;
                 arc.endSlope        = endSlope;
@@ -449,7 +453,7 @@ namespace CombatAI
                 request.source      = source;
                 request.setAction   = setAction;
                 request.buffer      = buffer;
-                castAction(request);
+                Scan(castAction, request);
             }
         }
 
@@ -462,7 +466,7 @@ namespace CombatAI
                 return;
             }
             buffer.Clear();
-            CastRequest request = new CastRequest();
+            CastRequest request = RentRequest();
             VisibleRow  arc     = VisibleRow.First;
             arc.startSlope      = startSlope;
             arc.endSlope        = endSlope;
@@ -477,11 +481,38 @@ namespace CombatAI
             request.source      = source;
             request.setAction   = setAction;
             request.buffer      = buffer;
-            castAction(request);
+            Scan(castAction, request);
+        }
+
+        private static CastRequest RentRequest()
+        {
+            CastRequest request = cachedRequest ?? new CastRequest();
+            cachedRequest = null;
+            return request;
+        }
+
+        private static void Scan(Action<CastRequest> castAction, CastRequest request)
+        {
+            try
+            {
+                castAction(request);
+            }
+            finally
+            {
+                // Do not retain a map or a callback closure on a thread between casts.
+                // Clearing also makes reuse safe after an interrupted or failed scan.
+                request.rows.Clear();
+                request.buffer = null;
+                request.grid = null;
+                request.map = null;
+                request.setAction = null;
+                if (cachedRequest == null) cachedRequest = request;
+            }
         }
 
         private class CastRequest
         {
+            public readonly List<VisibleRow> rows = new List<VisibleRow>();
             public List<Vector3>                    buffer;
             public int                              carryLimit = 5;
             public VisibleRow                       firstRow;

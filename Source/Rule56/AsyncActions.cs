@@ -20,25 +20,31 @@ namespace CombatAI
         private readonly List<Action>   queuedOffThreadActions  = new List<Action>();
         private readonly AutoResetEvent waitHandle              = new AutoResetEvent(false);
         private readonly Thread         thread;
-        private          bool           mainThreadActionQueueEmpty;
+        private volatile bool           mainThreadActionQueueEmpty;
+        private volatile bool           alive = true;
+        private          bool           started;
 
         public AsyncActions(int mainLoopTickInterval = 5)
         {
             this.mainLoopTickInterval = mainLoopTickInterval;
             hashOffset                = System.Threading.Interlocked.Increment(ref _globalInstanceCounter) % 128;
-            thread                    = new Thread(OffMainThreadActionLoop);
+            thread                    = new Thread(OffMainThreadActionLoop) { IsBackground = true };
         }
 
-        public bool Alive
-        {
-            get;
-            private set;
-        } = true;
+        public bool Alive => alive;
 
         public void Start()
         {
-            thread.Start();
-            running.Add(this);
+            lock (locker_offMain)
+            {
+                if (!alive || started) return;
+                lock (running)
+                {
+                    thread.Start();
+                    started = true;
+                    running.Add(this);
+                }
+            }
         }
 
         public void ExecuteMainThreadActions()
@@ -48,30 +54,39 @@ namespace CombatAI
 
         public void Kill()
         {
-            Alive = false;
-            running.Remove(this);
-            try
+            bool join;
+            lock (locker_offMain)
             {
-                lock (locker_Main)
-                {
-                    queuedMainThreadActions.Clear();
-                }
-                lock (locker_offMain)
-                {
-                    queuedOffThreadActions.Clear();
-                }
-                thread.Abort();
-                thread.Join(100);
-                waitHandle.Close();
+                if (!alive) return;
+                alive = false;
+                queuedOffThreadActions.Clear();
+                // The worker owns disposal once started. Signal while holding the same lock
+                // used by enqueue/disposal so nobody can signal a disposed wait handle.
+                if (started) waitHandle.Set();
+                else waitHandle.Dispose();
+                join = started && Thread.CurrentThread != thread;
             }
-            catch (Exception)
+            lock (locker_Main)
             {
+                queuedMainThreadActions.Clear();
+                mainThreadActionQueueEmpty = true;
             }
+            lock (running)
+            {
+                running.Remove(this);
+            }
+            // Long-running callbacks must observe Alive and return cooperatively.
+            if (join) thread.Join(100);
         }
 
         public static void KillAll()
         {
-            foreach (AsyncActions asyncActions in running.ToList())
+            List<AsyncActions> snapshot;
+            lock (running)
+            {
+                snapshot = running.ToList();
+            }
+            foreach (AsyncActions asyncActions in snapshot)
             {
                 asyncActions.Kill();
             }
@@ -81,6 +96,7 @@ namespace CombatAI
         {
             lock (locker_offMain)
             {
+                if (!alive) return;
                 if (queuedOffThreadActions.Count > 1024)
                 {
                     Log.Error($"ISMA: AsyncActions is leaking memory with more than {queuedOffThreadActions.Count} actions queued!");
@@ -97,6 +113,7 @@ namespace CombatAI
         {
             lock (locker_Main)
             {
+                if (!alive) return;
                 queuedMainThreadActions.Add(action);
                 mainThreadActionQueueEmpty = false;
             }
@@ -107,7 +124,7 @@ namespace CombatAI
             Action action = null;
             lock (locker_offMain)
             {
-                if (queuedOffThreadActions.Count > 0)
+                if (alive && queuedOffThreadActions.Count > 0)
                 {
                     action = queuedOffThreadActions[0];
                     queuedOffThreadActions.RemoveAt(0);
@@ -121,7 +138,7 @@ namespace CombatAI
             Action action = null;
             lock (locker_Main)
             {
-                if (queuedMainThreadActions.Count > 0)
+                if (alive && queuedMainThreadActions.Count > 0)
                 {
                     action = queuedMainThreadActions[0];
                     queuedMainThreadActions.RemoveAt(0);
@@ -135,7 +152,7 @@ namespace CombatAI
         {
             if (!mainThreadActionQueueEmpty || (GenTicks.TicksGame + hashOffset) % mainLoopTickInterval == 0)
             {
-                while (true)
+                while (Alive)
                 {
                     Action action = DequeueMainThreadAction();
                     if (action != null)
@@ -159,27 +176,34 @@ namespace CombatAI
 
         private void OffMainThreadActionLoop()
         {
-            while (Alive)
+            try
             {
-                Action action = DequeueOffThreadAction();
-                if (action != null)
+                while (Alive)
                 {
-                    try
+                    Action action = DequeueOffThreadAction();
+                    if (action != null)
                     {
-                        action();
+                        try
+                        {
+                            action();
+                        }
+                        catch (Exception er)
+                        {
+                            Log.Error(er.ToString());
+                        }
                     }
-                    catch (ThreadAbortException)
+                    else
                     {
-                        throw;
-                    }
-                    catch (Exception er)
-                    {
-                        Log.Error(er.ToString());
+                        waitHandle.WaitOne();
                     }
                 }
-                else
+            }
+            finally
+            {
+                Kill();
+                lock (locker_offMain)
                 {
-                    waitHandle.WaitOne();
+                    waitHandle.Dispose();
                 }
             }
         }

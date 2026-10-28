@@ -4,9 +4,17 @@
     <author>Krkr</author>
     <supportedVersions>
         <li>1.6</li>
+        <li>1.7</li>
     </supportedVersions>
     <packageId>Krkr.rule56</packageId>
     <modDependenciesByVersion>
+        <v1.7>
+            <li>
+                <packageId>brrainz.harmony</packageId>
+                <displayName>Harmony</displayName>
+                <steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl>
+            </li>
+        </v1.7>
         <v1.6>
             <li>
                 <packageId>brrainz.harmony</packageId>

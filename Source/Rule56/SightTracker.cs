@@ -58,6 +58,7 @@ namespace CombatAI
 
         public override void MapComponentUpdate()
         {
+            if (!SightUtility.SupportsMap(map)) return;
             base.MapComponentUpdate();
             updateCounter++;
             bool gamePaused      = false;

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>CombatAI</AssemblyName>
+    <RootNamespace>CombatAI</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>../../1.7/Assemblies/</OutputPath>
+    <RimWorldDir Condition="'$(RimWorldDir)' == ''">$(MSBuildThisFileDirectory)../../../../</RimWorldDir>
+    <RimWorldManagedDir Condition="'$(RimWorldManagedDir)' == ''">$(RimWorldDir)RimWorld.app/Contents/MacOS/</RimWorldManagedDir>
+    <HarmonyAssembly Condition="'$(HarmonyAssembly)' == ''">$(RimWorldDir)../../workshop/content/294100/2009463077/1.7/Assemblies/0Harmony.dll</HarmonyAssembly>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="**/*.cs" Exclude="obj/**;bin/**" />
+    <Reference Include="Assembly-CSharp" HintPath="$(RimWorldManagedDir)Assembly-CSharp.dll" Private="false" />
+    <Reference Include="UnityStubs" HintPath="$(RimWorldManagedDir)UnityStubs.dll" Private="false" />
+    <Reference Include="Waylith" HintPath="$(RimWorldManagedDir)Waylith.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(HarmonyAssembly)" Private="false" />
+    <Reference Include="0PrepatcherAPI" HintPath="../../1.6/Assemblies/0PrepatcherAPI.dll" Private="false" />
+  </ItemGroup>
+</Project>
