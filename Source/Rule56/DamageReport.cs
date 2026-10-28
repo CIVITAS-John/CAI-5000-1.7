@@ -280,46 +280,6 @@ public struct DamageReport
 		}
 	}
 
-	private float AdjustedSharp()
-	{
-		float damage;
-		float ap;
-		if (primaryIsRanged)
-		{
-			damage = rangedSharp;
-			ap = rangedSharpAp;
-		}
-		else
-		{
-			damage = meleeSharp;
-			ap = meleeSharpAp;
-		}
-
-		if (Mod_CE.active) return damage / 12f + ap;
-		if (ap != 0) return damage / 12f * ap;
-		return damage / 18f;
-	}
-
-	private float AdjustedBlunt()
-	{
-		float damage;
-		float ap;
-		if (primaryIsRanged)
-		{
-			damage = rangedBlunt;
-			ap = rangedBluntAp;
-		}
-		else
-		{
-			damage = meleeBlunt;
-			ap = meleeBluntAp;
-		}
-
-		if (Mod_CE.active) return damage / 12f + ap;
-		if (ap != 0) return damage / 12f * ap;
-		return damage / 18f;
-	}
-
 	private float GetArmorPenetration(ProjectileProperties projectile)
 	{
 		return Mod_CE.GetProjectileArmorPenetration(projectile);

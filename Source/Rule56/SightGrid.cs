@@ -10,7 +10,6 @@ namespace CombatAI
 {
 	public class SightGrid
 	{
-		private const    int                        COVERCARRYLIMIT = 6;
 		private readonly AsyncActions               asyncActions;
 		private readonly IBuckets<IBucketableThing> buckets;
 		private readonly List<Vector3>              buffer = new List<Vector3>(1024);
@@ -63,7 +62,6 @@ namespace CombatAI
 		/// </summary>
 		public readonly SightTracker sightTracker;
 		private readonly List<Thing> thingBuffer1 = new List<Thing>(256);
-		private readonly List<Thing> thingBuffer2 = new List<Thing>(256);
 		// Reused only while completing a scan on the main thread, never by the sight worker.
 		private readonly List<SpottingCandidate> spottingCandidates = new List<SpottingCandidate>(256);
 		private readonly List<int> spottedCandidateOrder = new List<int>(64);
@@ -87,7 +85,6 @@ namespace CombatAI
 		///     Things UInt64 map.
 		/// </summary>
 		public readonly IThingsUInt64Map thingsUInt64Map;
-		private readonly List<IBucketableThing> tmpDeRegisterList      = new List<IBucketableThing>(64);
 		private readonly List<IBucketableThing> tmpInconsistentRecords = new List<IBucketableThing>(64);
 		private readonly List<IBucketableThing> tmpInvalidRecords      = new List<IBucketableThing>(64);
 
@@ -438,11 +435,6 @@ namespace CombatAI
 			return false;
 		}
 
-		private ulong GetFlags(IBucketableThing item)
-		{
-			return item.thing.GetThingFlags();
-		}
-
 		private void SetSightCell(IntVec3 cell, int carry, int dist, float coverRating)
 		{
 			float d2         = sightScan.pos.DistanceToSquared(cell);
@@ -492,7 +484,6 @@ namespace CombatAI
 					spotting.cell  = cell;
 					spotting.flag  = flag;
 					spotting.state = (int)AIEnvAgentState.visible;
-					spotting.score = visibility;
 					sightScan.item.spottings.Add(spotting);
 				}
 			}
@@ -519,7 +510,6 @@ namespace CombatAI
 					spotting.cell  = node.cell;
 					spotting.flag  = flag;
 					spotting.state = (int)AIEnvAgentState.nearby;
-					spotting.score = node.distAbs;
 					sightScan.item.spottings.Add(spotting);
 				}
 			}
@@ -645,7 +635,7 @@ namespace CombatAI
 					}
 				}
 				MetaCombatAttribute attr = item.cachedDamage.attributes | availability;
-				grid.Next(pos, GetFlags(item), item.cachedDamage.adjustedSharp, item.cachedDamage.adjustedBlunt, attr);
+				grid.Next(pos, item.thing.GetThingFlags(), item.cachedDamage.adjustedSharp, item.cachedDamage.adjustedBlunt, attr);
 				grid_regions.Next();
 				var fogComp = map.GetComponent<MapComponent_FogGrid>();
 				// Both visitors finish on this grid's single worker before the next cast starts.
@@ -685,8 +675,8 @@ namespace CombatAI
 				}
 				grid.Set(origin, 1.0f, new Vector2(origin.x - pos.x, origin.z - pos.z));
 				grid.Set(pos, 1.0f, new Vector2(origin.x - pos.x, origin.z - pos.z));
-				grid.Next(pos, GetFlags(item), 0, 0, item.cachedDamage.attributes);
-				grid.Set(flagPos, item.Pawn == null || !item.Pawn.Downed ? GetFlags(item) : 0);
+				grid.Next(pos, item.thing.GetThingFlags(), 0, 0, item.cachedDamage.attributes);
+				grid.Set(flagPos, item.Pawn == null || !item.Pawn.Downed ? item.thing.GetThingFlags() : 0);
 				if (scanForEnemies)
 				{
 					if (item.ai.data.NumEnemies > 0 || item.ai.data.NumAllies > 0 || item.spottings.Count > 0 || Finder.Settings.Debug && Finder.Settings.Debug_ValidateSight)
@@ -897,10 +887,6 @@ namespace CombatAI
 			///     state
 			/// </summary>
 			public int state;
-			/// <summary>
-			///     Cell visibility.
-			/// </summary>
-			public float score;
 		}
 
 		private class IBucketableThing : IBucketable

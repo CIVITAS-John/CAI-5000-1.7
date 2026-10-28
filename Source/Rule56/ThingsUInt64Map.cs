@@ -124,46 +124,6 @@ namespace CombatAI
             return buckets.GetAll().Select(t => t.thing).ToList();
         }
 
-        private static IEnumerable<int> GetBucketIndices(ulong flag)
-        {
-            unchecked
-            {
-                if (flag == 0)
-                {
-                    yield break;
-                }
-                ulong c = 0xFF;
-                int   m = (TOP & flag) != 0 ? 8 : 4;
-                int   i;
-                if ((BOT & flag) != 0)
-                {
-                    c = 0xFF;
-                    i = 0;
-                }
-                else
-                {
-                    c = 0xFF00000000;
-                    i = 4;
-                }
-                for (; i < m; i++)
-                {
-                    if ((c & flag) != 0)
-                    {
-                        ulong k = (ulong)1 << i * 8;
-                        for (int j = 0; j < 8; j++)
-                        {
-                            if ((flag & k) != 0)
-                            {
-                                yield return j + i * 8;
-                            }
-                            k = k << 1;
-                        }
-                    }
-                    c = c << 8;
-                }
-            }
-        }
-
         private struct IBucketableThing : IBucketable
         {
             public readonly Thing thing;

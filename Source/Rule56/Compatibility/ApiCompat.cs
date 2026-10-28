@@ -11,13 +11,6 @@ using RimWorld;
 
 namespace CombatAI.Compatibility
 {
-    internal static class ReflectionHelpers
-    {
-        public static FieldInfo Field(Type t, string name, BindingFlags flags) => ReflectionCache.GetField(t, name, flags);
-        public static PropertyInfo Property(Type t, string name, BindingFlags flags) => ReflectionCache.GetProperty(t, name, flags);
-        public static MethodInfo Method(Type t, string name, BindingFlags flags, Type[] paramTypes = null) => ReflectionCache.GetMethod(t, name, flags, paramTypes);
-    }
-
     public static class ThingWithCompsCompat
     {
         public static IList<ThingComp> GetComps(ThingWithComps thing)
@@ -25,21 +18,19 @@ namespace CombatAI.Compatibility
             if (thing == null) return null;
             Type t = thing.GetType();
             // try common members in order
-            FieldInfo f = ReflectionHelpers.Field(t, "comps", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            FieldInfo f = ReflectionCache.GetField(t, "comps", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (f != null)
             {
                 var v = f.GetValue(thing) as IList<ThingComp>;
                 if (v != null) return v;
-                var arr = f.GetValue(thing) as ThingComp[];
-                if (arr != null) return arr.ToList();
             }
-            PropertyInfo p = ReflectionHelpers.Property(t, "AllComps", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            PropertyInfo p = ReflectionCache.GetProperty(t, "AllComps", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (p != null)
             {
                 var v = p.GetValue(thing) as IList<ThingComp>;
                 if (v != null) return v;
             }
-            FieldInfo f2 = ReflectionHelpers.Field(t, "compsByType", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            FieldInfo f2 = ReflectionCache.GetField(t, "compsByType", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (f2 != null)
             {
                 var dict = f2.GetValue(thing) as System.Collections.IDictionary;
@@ -48,8 +39,7 @@ namespace CombatAI.Compatibility
                     List<ThingComp> outList = new List<ThingComp>();
                     foreach (var value in dict.Values)
                     {
-                        if (value is ThingComp[] arr2) outList.AddRange(arr2);
-                        else if (value is IEnumerable<ThingComp> ie) outList.AddRange(ie);
+                        if (value is IEnumerable<ThingComp> ie) outList.AddRange(ie);
                     }
                     return outList;
                 }
@@ -228,13 +218,13 @@ namespace CombatAI.Compatibility
         {
             if (ws == null) return Enumerable.Empty<Window>();
             var t = ws.GetType();
-            var f = ReflectionHelpers.Field(t, "windows", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var f = ReflectionCache.GetField(t, "windows", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (f != null)
             {
                 if (f.GetValue(ws) is IEnumerable<Window> e) return e;
                 if (f.GetValue(ws) is System.Collections.IEnumerable ie) return ie.Cast<Window>();
             }
-            var p = ReflectionHelpers.Property(t, "Windows", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var p = ReflectionCache.GetProperty(t, "Windows", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (p != null)
             {
                 if (p.GetValue(ws) is IEnumerable<Window> e2) return e2;
@@ -265,13 +255,13 @@ namespace CombatAI.Compatibility
         {
             if (rg == null) return null;
             var t = rg.GetType();
-            var f = ReflectionHelpers.Field(t, "regionGrid", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var f = ReflectionCache.GetField(t, "regionGrid", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (f != null)
             {
                 var arr = f.GetValue(rg) as Array;
                 if (arr != null && index >= 0 && index < arr.Length) return arr.GetValue(index) as Region;
             }
-            var p = ReflectionHelpers.Property(t, "Item", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var p = ReflectionCache.GetProperty(t, "Item", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (p != null)
             {
                 try
@@ -281,7 +271,7 @@ namespace CombatAI.Compatibility
                 catch { }
             }
             // fallback: try method GetRegionAt
-            var m = ReflectionHelpers.Method(t, "GetRegionAt", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var m = ReflectionCache.GetMethod(t, "GetRegionAt", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             if (m != null)
             {
                 try
@@ -302,23 +292,23 @@ namespace CombatAI.Compatibility
             try
             {
                 var mapType = map.GetType();
-                var pfField = ReflectionHelpers.Field(mapType, "pathFinder", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var pfField = ReflectionCache.GetField(mapType, "pathFinder", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 object pf = pfField != null ? pfField.GetValue(map) : null;
                 if (pf == null)
                 {
-                    var pfProp = ReflectionHelpers.Property(mapType, "pathFinder", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    var pfProp = ReflectionCache.GetProperty(mapType, "pathFinder", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                     if (pfProp != null) pf = pfProp.GetValue(map);
                 }
                 if (pf != null)
                 {
                     var pfType = pf.GetType();
                     // try several overload shapes
-                    MethodInfo m = ReflectionHelpers.Method(pfType, "FindPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, new Type[] { typeof(IntVec3), typeof(IntVec3), typeof(Pawn) });
+                    MethodInfo m = ReflectionCache.GetMethod(pfType, "FindPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, new Type[] { typeof(IntVec3), typeof(IntVec3), typeof(Pawn) });
                     if (m != null)
                     {
                         return m.Invoke(pf, new object[] { start, dest, pawn }) as PawnPath;
                     }
-                    m = ReflectionHelpers.Method(pfType, "FindPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, new Type[] { typeof(IntVec3), typeof(IntVec3), typeof(TraverseParms) });
+                    m = ReflectionCache.GetMethod(pfType, "FindPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, new Type[] { typeof(IntVec3), typeof(IntVec3), typeof(TraverseParms) });
                     if (m != null)
                     {
                         // build traverse parms from pawn
@@ -326,7 +316,7 @@ namespace CombatAI.Compatibility
                         return m.Invoke(pf, new object[] { start, dest, tp }) as PawnPath;
                     }
                     // fallback: try a method with (IntVec3, IntVec3, Pawn, PathEndMode, object) signature
-                    m = ReflectionHelpers.Method(pfType, "FindPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    m = ReflectionCache.GetMethod(pfType, "FindPath", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                     if (m != null)
                     {
                         // attempt to invoke with common params
@@ -462,7 +452,7 @@ namespace CombatAI.Compatibility
                 for (int i = 0; i < list.Count; i++)
                 {
                     var d = list[i];
-                    var dn = d.defName ?? d.defName;
+                    var dn = d.defName;
                     if (dn == defName)
                     {
                         def = d;

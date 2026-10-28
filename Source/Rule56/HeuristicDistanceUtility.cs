@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Verse;
@@ -116,7 +115,6 @@ namespace CombatAI
             _regions.Clear();
             saveRegions                  = true;
             HeuristicDistanceUtility.map = map;
-            Exception er = null;
             try
             {
                 int hd = HeuristicDistanceTo_RegionWise(first, second, map, false);
@@ -127,19 +125,11 @@ namespace CombatAI
                     comp.flooder_heursitic.Flood(first, second, DistanceTo_CellWise_Delegate, null, Validator_CellWise_Delegate, 9999, 9999);
                 }
             }
-            catch (Exception exp)
-            {
-                er = exp;
-            }
             finally
             {
                 _regions.Clear();
                 HeuristicDistanceUtility.map = null;
                 saveRegions                  = false;
-            }
-            if (er != null)
-            {
-                throw er;
             }
             return _distCell;
         }

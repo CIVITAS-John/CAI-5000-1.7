@@ -217,11 +217,6 @@ namespace CombatAI
                         {
                             terrainFill = 1.0f;
                         }
-                        else
-                        {
-                            // some terrains may partially block (not common) - leave as 0 for now
-                            terrainFill = 0f;
-                        }
                     }
                 }
                 catch (Exception) { }
