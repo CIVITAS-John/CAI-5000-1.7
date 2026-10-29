@@ -46,7 +46,7 @@ namespace CombatAI
             }
             prevFogEnabled = Finder.Settings.FogOfWar_Enabled;
             prevFogDisableOnPlayerMap = Finder.Settings.FogOfWar_DisableOnPlayerMap;
-            prevFogUseVanillaUnexplored = Finder.Settings.FogOfWar_UseVanillaUnexplored;
+            prevFogUseVanillaUnexplored = MapComponent_FogGrid.WritesWarFogToVanilla;
             LongEventHandler.QueueLongEvent(ArmorUtility.Initialize, "CombatAI.Preparing", false, null);
             LongEventHandler.QueueLongEvent(CompatibilityManager.Initialize, "CombatAI.Preparing", false, null);
             LongEventHandler.QueueLongEvent(ThinkNodeDatabase.Initialize, "CombatAI.Preparing", false, null);
@@ -87,7 +87,7 @@ namespace CombatAI
                 }
             }
 
-            bool useVanillaNow = Finder.Settings.FogOfWar_UseVanillaUnexplored;
+            bool useVanillaNow = MapComponent_FogGrid.WritesWarFogToVanilla;
             try
             {
                 bool fogNow = Finder.Settings.FogOfWar_Enabled;
@@ -317,7 +317,7 @@ namespace CombatAI
             {
                 collapsible.Line(1);
                 collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_CloseInColony, ref Finder.Settings.FogOfWar_DisableOnPlayerMap, Keyed.CombatAI_Settings_Basic_FogOfWar_CloseInColony_Description, disabled: false);
-                collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored, ref Finder.Settings.FogOfWar_UseVanillaUnexplored, Keyed.CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description, disabled: false);
+                collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored, ref Finder.Settings.FogOfWar_UseVanillaUnexplored, Keyed.CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description, disabled: SightUtility.NewSightSystemActive);
                 collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_IndoorVisible, ref Finder.Settings.FogOfWar_IndoorVisible, Keyed.CombatAI_Settings_Basic_FogOfWar_IndoorVisible_Description, disabled: false);
 
                 collapsible.Line(1);

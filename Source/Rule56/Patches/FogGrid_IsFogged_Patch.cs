@@ -158,7 +158,7 @@ namespace CombatAI.Patches
                 if (SuppressCAIFogOnly)
                 {
                     if (__result
-                        && Finder.Settings.FogOfWar_UseVanillaUnexplored
+                        && MapComponent_FogGrid.WritesWarFogToVanilla
                         && !IsGravshipLandingCached()
                         && !(Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome))
                     {
@@ -183,7 +183,7 @@ namespace CombatAI.Patches
                 }
                 // respect the player's-map disable setting to avoid changing vanilla behaviour there
                 if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome) return;
-                if (!Finder.Settings.FogOfWar_UseVanillaUnexplored) return;
+                if (!MapComponent_FogGrid.WritesWarFogToVanilla) return;
                 if (IsGravshipLandingCached()) return;
                 if (SuppressDeepFogForVanillaChecks) return;
                 var comp = map.GetComp_Fast<MapComponent_FogGrid>();
@@ -208,7 +208,7 @@ namespace CombatAI.Patches
                 if (SuppressCAIFogOnly)
                 {
                     if (__result
-                        && Finder.Settings.FogOfWar_UseVanillaUnexplored
+                        && MapComponent_FogGrid.WritesWarFogToVanilla
                         && !IsGravshipLandingCached()
                         && !(Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome))
                     {
@@ -234,7 +234,7 @@ namespace CombatAI.Patches
                     __result = false;
                 }
                 if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome) return;
-                if (!Finder.Settings.FogOfWar_UseVanillaUnexplored) return;
+                if (!MapComponent_FogGrid.WritesWarFogToVanilla) return;
                 if (IsGravshipLandingCached()) return;
                 if (SuppressDeepFogForVanillaChecks) return;
                 var comp = map.GetComp_Fast<MapComponent_FogGrid>();

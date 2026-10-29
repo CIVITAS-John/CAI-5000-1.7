@@ -575,7 +575,7 @@ namespace CombatAI.R
         private static TaggedString _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description = null;
         /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.UseVanillaUnexplored.Description</c>. inner text:
         ///
-        /// <code>When enabled, CAI will write its invisible cells to the game's FogGrid so vanilla unexplored areas cover hidden cells.</code>
+        /// <code>When enabled, CAI will write its invisible cells to the game's FogGrid so vanilla unexplored areas cover hidden cells. Ignored while the unified sight system is enabled.</code>
         /// </summary>       
         public static TaggedString CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description
         {

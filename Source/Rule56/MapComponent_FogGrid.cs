@@ -134,8 +134,12 @@ namespace CombatAI
 			}
 		}
 
+		/// <summary>Whether war fog is mirrored into the vanilla FogGrid. The unified sight system keeps it in CAI's overlay only.</summary>
+		internal static bool WritesWarFogToVanilla =>
+			Finder.Settings.FogOfWar_UseVanillaUnexplored && !SightUtility.NewSightSystemActive;
+
 		internal bool EffectiveUseVanillaUnexplored =>
-			Finder.Settings.FogOfWar_UseVanillaUnexplored && !IsGravshipLandingSelectionActive;
+			WritesWarFogToVanilla && !IsGravshipLandingSelectionActive;
 
 		// Each array is published only after completion and remains immutable while sight workers use it.
 		internal byte[] SightGlowBuckets => sightGlowBuckets;
@@ -208,7 +212,7 @@ namespace CombatAI
 					{
 						initialized = false;
 						ready = false;					InitializeFogStateFromVanilla();						RecomputeOnceMainThread();
-						if (Finder.Settings.FogOfWar_UseVanillaUnexplored)
+						if (EffectiveUseVanillaUnexplored)
 						{
 							ApplyVanillaUnexploredOverlay();
 						}
