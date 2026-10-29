@@ -16,7 +16,6 @@ namespace CombatAI
     {
         private bool prevFogEnabled;
         private bool prevFogDisableOnPlayerMap;
-        private bool prevFogUseVanillaUnexplored;
         private static readonly object _settingsFileLock = new object();
         private readonly Listing_Collapsible                   collapsible_advance     = new Listing_Collapsible(true);
         private readonly Listing_Collapsible                   collapsible_basic       = new Listing_Collapsible(true);
@@ -46,7 +45,6 @@ namespace CombatAI
             }
             prevFogEnabled = Finder.Settings.FogOfWar_Enabled;
             prevFogDisableOnPlayerMap = Finder.Settings.FogOfWar_DisableOnPlayerMap;
-            prevFogUseVanillaUnexplored = MapComponent_FogGrid.WritesWarFogToVanilla;
             LongEventHandler.QueueLongEvent(ArmorUtility.Initialize, "CombatAI.Preparing", false, null);
             LongEventHandler.QueueLongEvent(CompatibilityManager.Initialize, "CombatAI.Preparing", false, null);
             LongEventHandler.QueueLongEvent(ThinkNodeDatabase.Initialize, "CombatAI.Preparing", false, null);
@@ -87,7 +85,6 @@ namespace CombatAI
                 }
             }
 
-            bool useVanillaNow = MapComponent_FogGrid.WritesWarFogToVanilla;
             try
             {
                 bool fogNow = Finder.Settings.FogOfWar_Enabled;
@@ -103,11 +100,11 @@ namespace CombatAI
                             if (fogNow)
                             {
                                 // When fog is enabled globally but the "disable on player maps" flag
-                                // was toggled on, we must restore CAI-applied war-fog on maps that
-                                // belong to the player faction so vanilla unexplored is visible.
+                                // was toggled on, clear CAI war fog on maps that belong to the player
+                                // faction so only vanilla unexplored fog remains.
                                 if (disableNow && map.IsPlayerHome)
                                 {
-                                    comp.RestoreAllAppliedWarFog();
+                                    comp.ClearWarFog();
                                 }
                                 else
                                 {
@@ -116,7 +113,7 @@ namespace CombatAI
                             }
                             else
                             {
-                                comp.RestoreAllAppliedWarFog();
+                                comp.ClearWarFog();
                             }
                         }
                         catch (Exception e)
@@ -127,32 +124,6 @@ namespace CombatAI
                 }
                 prevFogEnabled = fogNow;
                 prevFogDisableOnPlayerMap = disableNow;
-                // Handle changes to the new "use vanilla unexplored" setting
-                if (useVanillaNow != prevFogUseVanillaUnexplored)
-                {
-                    foreach (var map in Find.Maps)
-                    {
-                        try
-                        {
-                            var comp = map.GetComp_Fast<MapComponent_FogGrid>();
-                            if (comp == null) continue;
-                            if (useVanillaNow)
-                            {
-                                comp.RecomputeOnceMainThread();
-                                comp.ApplyVanillaUnexploredOverlay();
-                            }
-                            else
-                            {
-                                comp.RestoreAllAppliedWarFog();
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            Log.Error($"CombatAIMod: error while applying FogOfWar_UseVanillaUnexplored for map {map}: {e}");
-                        }
-                    }
-                }
-                prevFogUseVanillaUnexplored = useVanillaNow;
             }
             catch (Exception e)
             {
@@ -160,8 +131,8 @@ namespace CombatAI
             }
 
             // If the user just enabled "Close fow in colony map" and the current
-            // active map belongs to the player faction, restore any CAI-applied
-            // war-fog on that map and force a full fog redraw so vanilla
+            // active map belongs to the player faction, clear CAI war fog on
+            // that map and force a full fog redraw so vanilla
             // unexplored areas appear correctly immediately.
             try
             {
@@ -170,40 +141,12 @@ namespace CombatAI
                     var curComp = Find.CurrentMap.GetComp_Fast<MapComponent_FogGrid>();
                     if (curComp != null)
                     {
-                        curComp.RestoreAllAppliedWarFog();
+                        curComp.ClearWarFog();
                         foreach (var cell in Find.CurrentMap.AllCells)
                         {
                             Find.CurrentMap.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
                         }
                     }
-                }
-                
-                try
-                {
-                    if (useVanillaNow != prevFogUseVanillaUnexplored && Find.CurrentMap != null && Find.CurrentMap.IsPlayerHome)
-                    {
-                        var curComp = Find.CurrentMap.GetComp_Fast<MapComponent_FogGrid>();
-                        if (curComp != null)
-                        {
-                            if (useVanillaNow)
-                            {
-                                curComp.RecomputeOnceMainThread();
-                                curComp.ApplyVanillaUnexploredOverlay();
-                            }
-                            else
-                            {
-                                curComp.RestoreAllAppliedWarFog();
-                            }
-                            foreach (var cell in Find.CurrentMap.AllCells)
-                            {
-                                Find.CurrentMap.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-                            }
-                        }
-                    }
-                }
-                catch (Exception e)
-                {
-                    Log.Error($"CombatAIMod: error while applying UseVanillaUnexplored to current map: {e}");
                 }
             }
             catch (Exception e)
@@ -317,7 +260,6 @@ namespace CombatAI
             {
                 collapsible.Line(1);
                 collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_CloseInColony, ref Finder.Settings.FogOfWar_DisableOnPlayerMap, Keyed.CombatAI_Settings_Basic_FogOfWar_CloseInColony_Description, disabled: false);
-                collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored, ref Finder.Settings.FogOfWar_UseVanillaUnexplored, Keyed.CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description, disabled: SightUtility.NewSightSystemActive);
                 collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_IndoorVisible, ref Finder.Settings.FogOfWar_IndoorVisible, Keyed.CombatAI_Settings_Basic_FogOfWar_IndoorVisible_Description, disabled: false);
 
                 collapsible.Line(1);

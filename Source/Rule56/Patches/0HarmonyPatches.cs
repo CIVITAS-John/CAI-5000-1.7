@@ -26,11 +26,6 @@ namespace CombatAI.Patches
                 PathFinder_Patch.Patch(Finder.Harmony);
             }
             catch { }
-            try
-            {
-                SiegeBlueprintPlacer_CanPlaceBlueprint_Patch.Register(Finder.Harmony);
-            }
-            catch { }
         }
     }
 }

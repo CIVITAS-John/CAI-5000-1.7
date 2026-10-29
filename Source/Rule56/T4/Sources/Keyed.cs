@@ -561,28 +561,6 @@ namespace CombatAI.R
                    _CombatAI_Settings_Basic_FogOfWar_CloseInColony_Description : _CombatAI_Settings_Basic_FogOfWar_CloseInColony_Description = "CombatAI.Settings.Basic.FogOfWar.CloseInColony.Description".Translate();
         }
 
-        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored = null;
-        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.UseVanillaUnexplored</c>. inner text:
-        ///
-        /// <code>Use vanilla unexplored overlay</code>
-        /// </summary>       
-        public static TaggedString CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored
-        {
-            get => _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored != null ?
-                   _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored : _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored = "CombatAI.Settings.Basic.FogOfWar.UseVanillaUnexplored".Translate();
-        }
-
-        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description = null;
-        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.UseVanillaUnexplored.Description</c>. inner text:
-        ///
-        /// <code>When enabled, CAI will write its invisible cells to the game's FogGrid so vanilla unexplored areas cover hidden cells. Ignored while the unified sight system is enabled.</code>
-        /// </summary>       
-        public static TaggedString CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description
-        {
-            get => _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description != null ?
-                   _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description : _CombatAI_Settings_Basic_FogOfWar_UseVanillaUnexplored_Description = "CombatAI.Settings.Basic.FogOfWar.UseVanillaUnexplored.Description".Translate();
-        }
-
         private static TaggedString _CombatAI_Settings_Basic_FogOfWar_IndoorVisible = null;
         /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.IndoorVisible</c>. inner text:
         ///

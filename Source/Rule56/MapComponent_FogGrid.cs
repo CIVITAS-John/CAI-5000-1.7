@@ -63,8 +63,6 @@ namespace CombatAI
 		private Action<int, bool> _nativeFogWriter;
 		private bool   initialized;
 		private bool   previousFogEnabled;
-		private bool   previousUseVanillaUnexplored;
-		private bool   vanillaRebuildPending;
 
 		private          Rect      mapScreenRect;
 		private volatile bool      ready;
@@ -116,30 +114,6 @@ namespace CombatAI
 			sightGlowBlocksZ = Mathf.Max(1, Mathf.CeilToInt(mapSizeZ / (float)SIGHT_GLOW_BLOCK_SIZE));
 			grid2d       = new ISection[Mathf.CeilToInt(mapSizeX / (float)SECTION_SIZE)][];
 		}
-
-		internal static bool IsGravshipLandingSelectionActive
-		{
-			get
-			{
-				if (!ModsConfig.OdysseyActive) return false;
-				try
-				{
-					if (Current.ProgramState != ProgramState.Playing) return false;
-					var ctrl = Find.GravshipController;
-					if (ctrl == null) return false;
-					return ctrl.LandingAreaConfirmationInProgress
-						|| WorldComponent_GravshipController.CutsceneInProgress;
-				}
-				catch { return false; }
-			}
-		}
-
-		/// <summary>Whether war fog is mirrored into the vanilla FogGrid. The unified sight system keeps it in CAI's overlay only.</summary>
-		internal static bool WritesWarFogToVanilla =>
-			Finder.Settings.FogOfWar_UseVanillaUnexplored && !SightUtility.NewSightSystemActive;
-
-		internal bool EffectiveUseVanillaUnexplored =>
-			WritesWarFogToVanilla && !IsGravshipLandingSelectionActive;
 
 		// Each array is published only after completion and remains immutable while sight workers use it.
 		internal byte[] SightGlowBuckets => sightGlowBuckets;
@@ -212,10 +186,6 @@ namespace CombatAI
 					{
 						initialized = false;
 						ready = false;					InitializeFogStateFromVanilla();						RecomputeOnceMainThread();
-						if (EffectiveUseVanillaUnexplored)
-						{
-							ApplyVanillaUnexploredOverlay();
-						}
 						// Detected a save created before CellFogState existed — notify the user with a
 						// red negative-event letter so it is prominent and cannot be missed.
 						if (_fogSaveVersion == 0 && Finder.Settings.FogOfWar_Enabled)
@@ -278,34 +248,7 @@ namespace CombatAI
 
 
 
-		internal void ClearCAIFogBitsForSave()
-		{
-			lock (fogLock)
-			{
-				if (map?.fogGrid == null) return;
-				for (int i = 0; i < fogState.Length; i++)
-				{
-					if (fogState[i] == CellFogState.CAIFogged)
-						WriteNativeFogBit(i, false);
-				}
-			}
-		}
-
-		internal void RestoreCAIFogBitsAfterSave()
-		{
-			lock (fogLock)
-			{
-				if (!EffectiveUseVanillaUnexplored) return;
-				if (map?.fogGrid == null) return;
-				for (int i = 0; i < fogState.Length; i++)
-				{
-					if (fogState[i] == CellFogState.CAIFogged)
-						WriteNativeFogBit(i, true);
-				}
-			}
-		}
-
-		public void RestoreAllAppliedWarFog()
+		public void ClearWarFog()
 		{
 			lock (fogLock)
 			{
@@ -316,7 +259,6 @@ namespace CombatAI
 					{
 						if (fogState[i] == CellFogState.CAIFogged)
 						{
-							WriteNativeFogBit(i, false);
 							fogState[i] = CellFogState.VanillaExplored;
 							cleared++;
 						}
@@ -340,11 +282,11 @@ namespace CombatAI
 							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
 					}
 					if (Finder.Settings.Debug)
-						Log.Message($"MapComponent_FogGrid: restored {cleared} CAIFogged cells for map {map}");
+						Log.Message($"MapComponent_FogGrid: cleared {cleared} CAIFogged cells for map {map}");
 				}
 				catch (Exception e)
 				{
-					Log.Error($"MapComponent_FogGrid: error in RestoreAllAppliedWarFog for map {map}: {e}");
+					Log.Error($"MapComponent_FogGrid: error in ClearWarFog for map {map}: {e}");
 				}
 			}
 		}
@@ -381,45 +323,6 @@ namespace CombatAI
 			}
 		}
 
-		public void ApplyVanillaUnexploredOverlay()
-		{
-			lock (fogLock)
-			{
-				if (!SightUtility.SupportsMap(map)) return;
-				try
-				{
-					InitializeFogStateFromVanilla();
-					for (int i = 0; i < fogState.Length; i++)
-					{
-						if (fogState[i] == CellFogState.CAIFogged)
-							WriteNativeFogBit(i, true);
-					}
-					foreach (var c in map.AllCells)
-						map.mapDrawer.MapMeshDirty(c, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-					if (Finder.Settings.Debug)
-						Log.Message($"MapComponent_FogGrid: Applied DeepWarFog visual overlay for map {map}");
-				}
-				catch (Exception e)
-				{
-					Log.Error($"MapComponent_FogGrid: error while applying DeepWarFog visual overlay for map {map}: {e}");
-				}
-			}
-		}
-
-		public void ScheduleVanillaUnexploredRebuild()
-		{
-			if (!Finder.Settings.FogOfWar_Enabled) return;
-			if (!EffectiveUseVanillaUnexplored) return;
-			if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome) return;
-			if (vanillaRebuildPending) return;
-			vanillaRebuildPending = true;
-			asyncActions.EnqueueMainThreadAction(() =>
-			{
-				vanillaRebuildPending = false;
-				ApplyVanillaUnexploredOverlay();
-			});
-		}
-
 		public void ScheduleOnVanillaFloodUnfog()
 		{
 			if (!Finder.Settings.FogOfWar_Enabled) return;
@@ -431,23 +334,7 @@ namespace CombatAI
 				floodUnfogPending = false;
 				lock (fogLock)
 				{
-					Patches.FogGrid_IsFogged_Patch.PushSuppressDeepFogForVanillaChecks();
-					try
-					{
-						InitializeFogStateFromVanilla();
-					}
-					finally
-					{
-						Patches.FogGrid_IsFogged_Patch.PopSuppressDeepFogForVanillaChecks();
-					}
-					if (EffectiveUseVanillaUnexplored)
-					{
-						for (int i = 0; i < fogState.Length; i++)
-						{
-							if (fogState[i] == CellFogState.CAIFogged)
-								WriteNativeFogBit(i, true);
-						}
-					}
+					InitializeFogStateFromVanilla();
 					if (map?.mapDrawer != null)
 					{
 						foreach (var cell in map.AllCells)
@@ -478,24 +365,8 @@ namespace CombatAI
 						if (pawn.Faction != null && pawn.Faction.IsPlayer)
 							FloodFillerFog.FloodUnfog(pawn.Position, map);
 					}
-					// Re-read the true vanilla state (bypassing the CAI IsFogged patch)
-					Patches.FogGrid_IsFogged_Patch.PushSuppressDeepFogForVanillaChecks();
-					try
-					{
-						InitializeFogStateFromVanilla();
-					}
-					finally
-					{
-						Patches.FogGrid_IsFogged_Patch.PopSuppressDeepFogForVanillaChecks();
-					}
-					if (EffectiveUseVanillaUnexplored)
-					{
-						for (int i = 0; i < fogState.Length; i++)
-						{
-							if (fogState[i] == CellFogState.CAIFogged)
-								WriteNativeFogBit(i, true);
-						}
-					}
+					// Re-read what vanilla revealed
+					InitializeFogStateFromVanilla();
 					if (map?.mapDrawer != null)
 					{
 						foreach (var cell in map.AllCells)
@@ -508,29 +379,6 @@ namespace CombatAI
 				{
 					Log.Error($"MapComponent_FogGrid: error in ReinitializeFogFromScratch: {e}");
 				}
-			}
-		}
-
-		public void ApplyWarFogChangeMainThread(int index, bool dirtyMesh = true)
-		{
-			if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome)
-				return;
-			int mapSizeX = map.Size.x;
-			int x = index % mapSizeX;
-			int z = index / mapSizeX;
-			IntVec3 cell = new IntVec3(x, 0, z);
-			if (dirtyMesh) map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-			if (EffectiveUseVanillaUnexplored && map?.fogGrid != null)
-			{
-				try
-				{
-					var st = fogState[index];
-					if (st == CellFogState.CAIFogged)
-						WriteNativeFogBit(index, true);
-					else if (st == CellFogState.VanillaExplored)
-						WriteNativeFogBit(index, false);
-				}
-				catch { }
 			}
 		}
 
@@ -578,7 +426,6 @@ namespace CombatAI
 				}
 				foreach (int index in pendingChanges)
 				{
-					ApplyWarFogChangeMainThread(index, false);
 					int x = index % mapSizeX, z = index / mapSizeX;
 					// Vanilla's two-argument API invalidates sections touched by all eight
 					// adjacent cells as well as the changed cell, even across corners.
@@ -616,7 +463,6 @@ namespace CombatAI
 						if ((uint)idx >= (uint)fogState.Length) return;
 						if (fogState[idx] != CellFogState.CAIFogged) return;
 						fogState[idx] = CellFogState.VanillaExplored;
-						WriteNativeFogBit(idx, false);
 						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
 					}
 
@@ -769,32 +615,6 @@ namespace CombatAI
 			}
 		}
 
-		private void ClearVanillaFogBitsOnly()
-		{
-			lock (fogLock)
-			{
-				try
-				{
-					for (int i = 0; i < fogState.Length; i++)
-					{
-						if (fogState[i] == CellFogState.CAIFogged)
-							WriteNativeFogBit(i, false);
-					}
-					if (map?.mapDrawer != null)
-					{
-						foreach (var cell in map.AllCells)
-							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-					}
-					if (Finder.Settings.Debug)
-						Log.Message($"MapComponent_FogGrid: cleared vanilla fog bits (CAI state retained) for map {map}");
-				}
-				catch (Exception e)
-				{
-					Log.Error($"MapComponent_FogGrid: error in ClearVanillaFogBitsOnly: {e}");
-				}
-			}
-		}
-
 		public override void MapComponentUpdate()
 		{
 			if (!SightUtility.SupportsMap(map)) return;
@@ -806,27 +626,14 @@ namespace CombatAI
 			{
 				previousFogEnabled = true;
 			}
-			// if fog was enabled previously but now disabled, restore modified cells
+			// if fog was enabled previously but now disabled, clear war fog
 			if (previousFogEnabled && !Finder.Settings.FogOfWar_Enabled)
 			{
-				asyncActions.EnqueueMainThreadAction(RestoreAllAppliedWarFog);
+				asyncActions.EnqueueMainThreadAction(ClearWarFog);
 				previousFogEnabled = false;
 				return;
 			}
 
-			// detect runtime changes to FogOfWar_UseVanillaUnexplored (or landing selection phase) and apply/restore as needed
-			if (EffectiveUseVanillaUnexplored != previousUseVanillaUnexplored)
-			{
-				if (EffectiveUseVanillaUnexplored)
-				{
-					asyncActions.EnqueueMainThreadAction(ApplyVanillaUnexploredOverlay);
-				}
-				else
-				{
-					asyncActions.EnqueueMainThreadAction(ClearVanillaFogBitsOnly);
-				}
-				previousUseVanillaUnexplored = EffectiveUseVanillaUnexplored;
-			}
 			if (!initialized && Finder.Settings.FogOfWar_Enabled)
 			{
 				initialized = true;
@@ -930,8 +737,6 @@ namespace CombatAI
 
 		public override void MapRemoved()
 		{
-			// restore any modified vanilla fog before removing
-			RestoreAllAppliedWarFog();
 			sightGlowBuckets = null;
 			shotRevealLastTick = null;
 			map.events.RegionsRoomsChanged -= OnRegionsRoomsChanged;
@@ -1213,16 +1018,10 @@ namespace CombatAI
 								comp.QueueFogChange(index);
 							}
 						}
-						try
+						if (comp.fogState[index] != CellFogState.VanillaExplored)
 						{
-							var st = comp.fogState[index];
-							if (st == CellFogState.CAIFogged ||
-								(st == CellFogState.VanillaUnexplored && !comp.EffectiveUseVanillaUnexplored))
-							{
-								val = 1f;
-							}
+							val = 1f;
 						}
-						catch { }
 						if (old != val)
 						{
 							if (allowLowerValues)

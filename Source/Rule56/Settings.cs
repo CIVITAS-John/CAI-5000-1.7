@@ -60,9 +60,6 @@ namespace CombatAI
         public bool  FogOfWar_Enabled;
         // When true and FogOfWar_Enabled is true, disable fog only on the player's current map
         public bool  FogOfWar_DisableOnPlayerMap = false;
-        // When true, CAI will apply war-fog changes to the vanilla FogGrid so
-        // vanilla "unexplored" areas are used to cover invisible cells.
-        public bool  FogOfWar_UseVanillaUnexplored = true;
         // When true, indoor rooms on the player map are always visible (not fogged)
         public bool  FogOfWar_IndoorVisible        = true;
         public float FogOfWar_FogColor            = 0.5f;
@@ -235,7 +232,6 @@ namespace CombatAI
             Scribe_Values.Look(ref PerformanceOpt_Enabled, $"PerformanceOpt_Enabled.{version}", true);
             Scribe_Values.Look(ref FogOfWar_Enabled, $"FogOfWar_Enabled.{version}");
             Scribe_Values.Look(ref FogOfWar_DisableOnPlayerMap, $"FogOfWar_DisableOnPlayerMap.{version}");
-            Scribe_Values.Look(ref FogOfWar_UseVanillaUnexplored, $"FogOfWar_UseVanillaUnexplored.{version}", true);
             Scribe_Values.Look(ref FogOfWar_IndoorVisible, $"FogOfWar_IndoorVisible.{version}", true);
             Scribe_Values.Look(ref Debug_ValidateSight, $"Debug_ValidateSight.{version}");
             Scribe_Values.Look(ref Debug_DrawShadowCasts, $"Debug_DrawShadowCasts.{version}");

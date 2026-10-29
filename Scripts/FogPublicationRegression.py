@@ -60,11 +60,9 @@ class Fog {
     public readonly object fogLock = new object();
     public readonly HashSet<int> pendingChanges = new HashSet<int>();
     readonly HashSet<IntVec2> dirtyNativeSections = new HashSet<IntVec2>();
-    public readonly Dictionary<int,int> Applied = new Dictionary<int,int>();
     public readonly Map map;
         Action<int,bool> _nativeFogWriter;
     public Fog(bool[] data) { map = new Map(data); }
-    void ApplyWarFogChangeMainThread(int index, bool dirtyMesh) { Applied[index] = Applied.ContainsKey(index) ? Applied[index]+1 : 1; }
     /* INDEX */
     /* FLUSH */
     /* WRITE */
@@ -93,16 +91,15 @@ class Program {
         fog.pendingChanges.Add(17+16*51);
         fog.pendingChanges.Add(16+16*51);
         fog.Flush();
-        Assert(fog.Applied.Count==2 && fog.Applied[16+16*51]==1, "cell changes were not coalesced");
         Assert(fog.map.mapDrawer.Calls==4 && fog.map.mapDrawer.Sections.Count==4, "corner neighbors missing or invalidated repeatedly");
         fog.Flush();
         Assert(fog.map.mapDrawer.Calls==4, "empty flush invalidates meshes");
         fog.pendingChanges.Add(0); fog.Flush();
         Assert(fog.map.mapDrawer.Calls==5, "map edge invalidation incorrect");
-        Console.WriteLine("unique cell changes and neighboring native mesh sections: PASS");
+        Console.WriteLine("neighboring native mesh sections invalidated once: PASS");
         Finder.Settings.FogOfWar_DisableOnPlayerMap=true; fog.map.IsPlayerHome=true;
         fog.pendingChanges.Add(40); fog.Flush();
-        Assert(fog.map.mapDrawer.Calls==5 && !fog.Applied.ContainsKey(40) && fog.pendingChanges.Count==0, "disabled home fog invalidates meshes or retains pending changes");
+        Assert(fog.map.mapDrawer.Calls==5 && fog.pendingChanges.Count==0, "disabled home fog invalidates meshes or retains pending changes");
         Finder.Settings.FogOfWar_DisableOnPlayerMap=false;
         // A 51-cell map leaves three cells in its last CAI 16-cell section.
         Assert(fog.Index(50,50)==2600 && fog.Index(51,0)==-1 && fog.Index(0,51)==-1, "partial section padding aliases valid cells");
