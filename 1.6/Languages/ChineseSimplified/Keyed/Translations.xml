@@ -104,4 +104,13 @@
     <CombatAI.Settings.FactionTech.Pathing>路径 {0}x。较高的值意味着更积极的路径规划</CombatAI.Settings.FactionTech.Pathing>
     <CombatAI.Settings.FactionTech.Sapping>破坏 {0}x。较高的值意味着较少的破坏行为</CombatAI.Settings.FactionTech.Sapping>
     <CombatAI.Settings.FactionTech.Group>冲锋 {0}x。较高的值意味着小组更可能冲锋</CombatAI.Settings.FactionTech.Group>
+    <CombatAI.Quick.NewSight.Title>新视野系统指南</CombatAI.Quick.NewSight.Title>
+    <CombatAI.Quick.NewSight.Description>将鼠标移动到武器 Gizmo 上即可预览绿色视野圈。新系统下，战争迷雾揭示半径与实际视野半径保持一致。</CombatAI.Quick.NewSight.Description>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.Enable>启用统一新视野系统</CombatAI.Settings.Basic.FogOfWar.NewSight.Enable>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.Enable.Description>使用团队共享视野模型进行攻击判定。即使武器射程足够，只要目标不在团队视野内也无法攻击。</CombatAI.Settings.Basic.FogOfWar.NewSight.Enable.Description>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.RequireFog>请先开启战争迷雾，才能使用新视野系统。</CombatAI.Settings.Basic.FogOfWar.NewSight.RequireFog>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius>统一基础视野半径</CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius.Readout>{0} 格</CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius.Readout>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing>显示攻击范围时同时显示视野范围</CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description>选中小人或炮塔时，同时绘制视野圈与攻击范围圈。</CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description>
 </LanguageData>

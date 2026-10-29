@@ -37,7 +37,7 @@ namespace Verse {
  public interface IExposable { void ExposeData(); }
  public class Def { public string defName="test"; public TechLevel techLevel=TechLevel.Industrial; }
  public struct IntVec3 { public static IntVec3 Invalid; public bool IsValid => false; public float DistanceTo(IntVec3 value) => 0; }
- public class Thing { public Faction Faction; public int PersonalityReads; public PersonalityTacker.PersonalityResult GetCombatPersonality() { PersonalityReads++; if(Scribe.mode!=LoadSaveMode.Saving) throw new Exception("personality read while loading"); return default; } }
+ public class Thing { public Faction Faction; public int PersonalityReads; public bool FailPersonality; public PersonalityTacker.PersonalityResult GetCombatPersonality() { PersonalityReads++; if(FailPersonality || Scribe.mode!=LoadSaveMode.Saving) throw new Exception("personality unavailable"); return default; } }
  public class RaceProperties { public bool Animal; }
  public class Pawn : Thing { public RaceProperties RaceProps=new RaceProperties(); public IntVec3 Position; public MindState mindState; }
  public class MindState { public Duty duty; } public class Duty { public Def def; }
@@ -45,11 +45,11 @@ namespace Verse {
  public enum LoadSaveMode { Inactive, LoadingVars, ResolvingCrossRefs, PostLoadInit, Saving }
  public static class Scribe { public static LoadSaveMode mode; }
  public static class Scribe_Values { public static void Look<T>(ref T value,string key,T fallback=default) {} }
- public static class Scribe_Deep { public static List<string> Keys=new List<string>(); public static void Look<T>(ref T value,string key) { Keys.Add(key); } }
+ public static class Scribe_Deep { public static List<string> Keys=new List<string>(); public static Dictionary<string,object> Values=new Dictionary<string,object>(); public static string FailKey; public static void Look<T>(ref T value,string key) { Keys.Add(key); if(key==FailKey) throw new InvalidOperationException("serialization unavailable"); Values[key]=value; } }
  public static class Scribe_TargetInfo { public static void Look(ref object target,string key) {} }
  public enum LookMode { Deep }
  public static class Scribe_Collections { public static object Loaded; public static void Look<T>(ref List<T> value,string key,LookMode mode) { value=(List<T>)Loaded; } }
- public static class Log { public static void Warning(string s) { throw new Exception(s); } public static void Error(string s) {} public static void ErrorOnce(string s,int key) {} }
+ public static class Log { public static List<string> Warnings=new List<string>(); public static void Warning(string s) { Warnings.Add(s); } public static void Error(string s) {} public static void ErrorOnce(string s,int key) {} }
  public static class GenTicks { public static int TicksGame; }
  public static class Extensions { public static string Formatted(this string format,params object[] args) => string.Format(format,args); public static bool NullOrEmpty<T>(this List<T> list) => list==null || list.Count==0; }
 }
@@ -71,7 +71,7 @@ namespace CombatAI {
   public void LoadTechSettings() { LOAD_TECH }
  }
  public class PersonalityTacker {
-  public struct PersonalityResult { public float Value; public static PersonalityResult From(Settings.FactionTechSettings s) => new PersonalityResult{Value=s.duck}; public static PersonalityResult operator *(PersonalityResult a,float x) => a; public static PersonalityResult operator +(PersonalityResult a,PersonalityResult b) => a; }
+  public struct PersonalityResult { public float Value; public static PersonalityResult Default => new PersonalityResult{Value=1}; public static PersonalityResult From(Settings.FactionTechSettings s) => new PersonalityResult{Value=s.duck}; public static PersonalityResult operator *(PersonalityResult a,float x) => a; public static PersonalityResult operator +(PersonalityResult a,PersonalityResult b) => a; }
   GET_THING
   GET_FACTION
   PersonalityResult GetPawnPersonality(Pawn pawn) { throw new Exception("unexpected leader personality"); }
@@ -111,6 +111,14 @@ class Program {
   }
   Scribe.mode=LoadSaveMode.Saving; var saving=new TestComp(); Scribe_Deep.Keys.Clear(); saving.PostExposeData();
   Check(saving.parent.PersonalityReads==1 && Scribe_Deep.Keys.Contains("personality"),"debug save still emits personality");
+  var failed=new TestComp(); failed.parent.FailPersonality=true; Scribe_Deep.Keys.Clear(); Scribe_Deep.Values.Clear(); Log.Warnings.Clear(); failed.PostExposeData();
+  Check(Log.Warnings.Count==1 && Scribe_Deep.Keys.Contains("AIAgentData.0") && Scribe_Deep.Keys.Contains("duties2"),"failed diagnostic personality cannot interrupt persistent pawn save");
+  Check(Scribe_Deep.Values.TryGetValue("personality",out object fallback) && ((PersonalityTacker.PersonalityResult)fallback).Value==PersonalityTacker.PersonalityResult.Default.Value,"failed personality lookup serializes the diagnostic fallback");
+  Scribe_Deep.Keys.Clear(); Log.Warnings.Clear(); Scribe_Deep.FailKey="personality"; bool serializationFailed=false;
+  try { new TestComp().PostExposeData(); }
+  catch(InvalidOperationException ex) { serializationFailed=ex.Message=="serialization unavailable"; }
+  finally { Scribe_Deep.FailKey=null; }
+  Check(serializationFailed && Log.Warnings.Count==0 && !Scribe_Deep.Keys.Contains("AIAgentData.0"),"real serialization failure propagates without a misleading lookup warning");
   var dynamicMethod=new DynamicMethod("HarmonyGeneratedJob",typeof(void),Type.EmptyTypes);
   Check(dynamicMethod.DeclaringType==null,"dynamic method has no declaring type");
   var capture=typeof(JobLog).GetMethod("CaptureStackTrace",BindingFlags.Static|BindingFlags.NonPublic);
@@ -120,7 +128,7 @@ class Program {
   var pawn=new Pawn(); var job=new Verse.AI.Job{targetA=new Verse.AI.Target()};
   Check(JobLog.For(pawn,job,(Verse.AI.ThinkNode)null).stacktrace.Count>0,"thinknode overload records stack");
   Check(JobLog.For(pawn,job,"ordered").stacktrace.Count>0,"tag overload records stack");
-  Console.WriteLine("PASS: factionless personality, load/save diagnostics, fresh/custom tech settings, dynamic/unknown job frames and both job-log callers");
+  Console.WriteLine("PASS: factionless personality, load/save diagnostics and diagnostic failure recovery, fresh/custom tech settings, dynamic/unknown job frames and both job-log callers");
  }
 }
 '''

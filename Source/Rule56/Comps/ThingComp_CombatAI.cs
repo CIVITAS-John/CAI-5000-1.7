@@ -2564,7 +2564,15 @@ namespace CombatAI.Comps
             // Personality is diagnostic output; faction references may not exist while loading.
             if (Finder.Settings.Debug && Scribe.mode == LoadSaveMode.Saving)
             {
-                PersonalityTacker.PersonalityResult personality = parent.GetCombatPersonality();
+                PersonalityTacker.PersonalityResult personality = PersonalityTacker.PersonalityResult.Default;
+                try
+                {
+                    personality = parent.GetCombatPersonality();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"[CAI-5000] Failed to serialize combat personality for {parent}: {ex.Message}");
+                }
                 Scribe_Deep.Look(ref personality, "personality");
             }
             Scribe_Deep.Look(ref data, "AIAgentData.0");

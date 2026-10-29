@@ -24,13 +24,13 @@ namespace CombatAI.Patches
 
 			public static void Prefix(IntVec3 cell, Map map, FleckDef fleckDef, float scale)
 			{
-				if (Finder.Settings.FogOfWar_Enabled && fleckDef == FleckDefOf.ShotFlash)
+				if (Finder.Settings != null && Finder.Settings.FogOfWar_Enabled && map != null && fleckDef == FleckDefOf.ShotFlash)
 				{
 					MapComponent_FogGrid grid = map.GetComp_Fast<MapComponent_FogGrid>();
 					if (grid != null)
 					{
 						Current = cell;
-						grid.RevealSpot(cell, Maths.Max(scale, 3f), Rand.Range(120, 240));
+						grid.RevealShotSpot(cell, scale);
 					}
 				}
 			}

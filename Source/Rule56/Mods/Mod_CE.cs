@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Reflection;
 using CombatAI.Comps;
+using CombatAI.Patches;
 using HarmonyLib;
 using RimWorld;
 using Verse;
@@ -111,7 +112,9 @@ namespace CombatAI
                 .FirstOrDefault(m => m.Name == "TryStartCastOn" && m.ReturnType == typeof(bool));
             if (mCETryStartCastOn != null)
             {
-                Finder.Harmony.Patch(mCETryStartCastOn, postfix: new HarmonyMethod(AccessTools.Method(typeof(Verb_ShootCE_Targeting_Patch), nameof(Verb_ShootCE_Targeting_Patch.Postfix))));
+                Finder.Harmony.Patch(mCETryStartCastOn,
+                    prefix: new HarmonyMethod(AccessTools.Method(typeof(Verb_ShootCE_Targeting_Patch), nameof(Verb_ShootCE_Targeting_Patch.Prefix))),
+                    postfix: new HarmonyMethod(AccessTools.Method(typeof(Verb_ShootCE_Targeting_Patch), nameof(Verb_ShootCE_Targeting_Patch.Postfix))));
                 Log.Message("ISMA: Patched Verb_ShootCE:TryStartCastOn for targeting notifications.");
             }
         }
@@ -136,13 +139,21 @@ namespace CombatAI
         }
 
         /// <summary>
-        /// Postfix for Verb_ShootCE.TryStartCastOn that notifies the target pawn it is
-        /// being aimed at. Registered manually so the Transpiler in Verb_TryCastNextBurstShot_Patch
-        /// can continue to skip all CE verbs safely. Coexists with CE AIMBOT 2 because
-        /// both use pure Postfixes and touch completely separate state.
+        /// Shared sight gate and targeting notification for Verb_ShootCE.TryStartCastOn.
+        /// Registered separately so the burst-shot transpiler can keep skipping CE verbs.
         /// </summary>
         private static class Verb_ShootCE_Targeting_Patch
         {
+            public static bool Prefix(Verb __instance, ref bool __result, object[] __args)
+            {
+                if (Verb_Patch.ShouldBlockBySharedSightForVerb(__instance, __args))
+                {
+                    __result = false;
+                    return false;
+                }
+                return true;
+            }
+
             public static void Postfix(Verb __instance, bool __result)
             {
                 if (__result && __instance?.caster != null)

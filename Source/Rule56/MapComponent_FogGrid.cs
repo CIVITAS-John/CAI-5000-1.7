@@ -23,7 +23,16 @@ namespace CombatAI
 	public class MapComponent_FogGrid : MapComponent
 	{
 		private const int SECTION_SIZE = 16;
+		private const int SIGHT_GLOW_BLOCK_SIZE = 6;
+		private const int SIGHT_GLOW_BUCKET_COUNT = 16;
+		private const int SIGHT_GLOW_REFRESH_INTERVAL = 15;
+		private const int SHOT_REVEAL_COOLDOWN_TICKS = 20;
+		private const int SHOT_REVEAL_DURATION_TICKS = 90;
 		private readonly int mapSizeX, mapSizeZ;
+		private readonly int sightGlowBlocksX, sightGlowBlocksZ;
+		private volatile byte[] sightGlowBuckets;
+		private int sightGlowLastRefreshTick = -9999;
+		private int[] shotRevealLastTick;
 		private readonly object fogLock = new object();
 		private readonly HashSet<int> pendingChanges = new HashSet<int>();
 		private readonly HashSet<IntVec2> dirtyNativeSections = new HashSet<IntVec2>();
@@ -101,6 +110,10 @@ namespace CombatAI
 			mapSizeZ = map.Size.z;
 			mapRect      = new Rect(0, 0, mapSizeX, mapSizeZ);
 			fogState     = new CellFogState[map.cellIndices.NumGridCells];
+			shotRevealLastTick = new int[map.cellIndices.NumGridCells];
+			for (int i = 0; i < shotRevealLastTick.Length; i++) shotRevealLastTick[i] = -9999;
+			sightGlowBlocksX = Mathf.Max(1, Mathf.CeilToInt(mapSizeX / (float)SIGHT_GLOW_BLOCK_SIZE));
+			sightGlowBlocksZ = Mathf.Max(1, Mathf.CeilToInt(mapSizeZ / (float)SIGHT_GLOW_BLOCK_SIZE));
 			grid2d       = new ISection[Mathf.CeilToInt(mapSizeX / (float)SECTION_SIZE)][];
 		}
 
@@ -123,6 +136,42 @@ namespace CombatAI
 
 		internal bool EffectiveUseVanillaUnexplored =>
 			Finder.Settings.FogOfWar_UseVanillaUnexplored && !IsGravshipLandingSelectionActive;
+
+		// Each array is published only after completion and remains immutable while sight workers use it.
+		internal byte[] SightGlowBuckets => sightGlowBuckets;
+
+		public byte GetSightGlowBucket(IntVec3 cell)
+		{
+			return GetSightGlowBucket(cell, sightGlowBuckets);
+		}
+
+		internal byte GetSightGlowBucket(IntVec3 cell, byte[] buckets)
+		{
+			if (buckets == null) return SIGHT_GLOW_BUCKET_COUNT - 1;
+			int x = Mathf.Clamp(cell.x, 0, mapSizeX - 1) / SIGHT_GLOW_BLOCK_SIZE;
+			int z = Mathf.Clamp(cell.z, 0, mapSizeZ - 1) / SIGHT_GLOW_BLOCK_SIZE;
+			return buckets[z * sightGlowBlocksX + x];
+		}
+
+		private void RefreshSightGlowCacheIfNeeded()
+		{
+			if (!SightUtility.NewSightSystemActive || ticksGame - sightGlowLastRefreshTick < SIGHT_GLOW_REFRESH_INTERVAL) return;
+			glow = map.glowGrid;
+			if (glow == null) return;
+			byte[] buckets = new byte[sightGlowBlocksX * sightGlowBlocksZ];
+			for (int z = 0; z < sightGlowBlocksZ; z++)
+			{
+				int cellZ = Mathf.Min(z * SIGHT_GLOW_BLOCK_SIZE + SIGHT_GLOW_BLOCK_SIZE / 2, mapSizeZ - 1);
+				for (int x = 0; x < sightGlowBlocksX; x++)
+				{
+					int cellX = Mathf.Min(x * SIGHT_GLOW_BLOCK_SIZE + SIGHT_GLOW_BLOCK_SIZE / 2, mapSizeX - 1);
+					float groundGlow = Mathf.Clamp01(glow.GroundGlowAt(new IntVec3(cellX, 0, cellZ)));
+					buckets[z * sightGlowBlocksX + x] = (byte)Mathf.Clamp(Mathf.RoundToInt(groundGlow * (SIGHT_GLOW_BUCKET_COUNT - 1)), 0, SIGHT_GLOW_BUCKET_COUNT - 1);
+				}
+			}
+			sightGlowBuckets = buckets;
+			sightGlowLastRefreshTick = ticksGame;
+		}
 
 		public float SkyGlow
 		{
@@ -191,12 +240,14 @@ namespace CombatAI
 
 		public bool IsFogged(IntVec3 cell)
 		{
+			if (map == null || fogState == null || !cell.IsValid || !cell.InBounds(map)) return false;
 			return IsFogged(cellIndices.CellToIndex(cell));
 		}
 		public bool IsFogged(int index)
 		{
 			if (!SightUtility.SupportsMap(map)) return false;
-			if (!Finder.Settings.FogOfWar_Enabled)
+			Settings settings = Finder.Settings;
+			if (settings == null || !settings.FogOfWar_Enabled || fogState == null || (uint)index >= (uint)fogState.Length)
 			{
 				return false;
 			}
@@ -743,6 +794,8 @@ namespace CombatAI
 		public override void MapComponentUpdate()
 		{
 			if (!SightUtility.SupportsMap(map)) return;
+			ticksGame = GenTicks.TicksGame;
+			RefreshSightGlowCacheIfNeeded();
 			// Cache map.IsPlayerHome on main thread so off-thread code can safely read it.
 			try { _cachedIsPlayerHome = map.IsPlayerHome; } catch { }
 			if (Finder.Settings.FogOfWar_Enabled && !previousFogEnabled)
@@ -847,11 +900,11 @@ namespace CombatAI
 			}
 		}
 
-		public void RevealSpot(IntVec3 cell, float radius, int duration)
+		public void RevealSpot(IntVec3 cell, float radius, int duration, bool applyRangeMultiplier = true)
 		{
 			ITempSpot spot = new ITempSpot();
 			spot.center   = cell;
-			spot.radius   = Maths.Max(radius, 1f) * Finder.Settings.FogOfWar_RangeMultiplier;
+			spot.radius   = Maths.Max(radius, 1f) * (applyRangeMultiplier ? Finder.Settings.FogOfWar_RangeMultiplier : 1f);
 			spot.duration = duration;
 			lock (_lockerSpots)
 			{
@@ -859,10 +912,24 @@ namespace CombatAI
 			}
 		}
 
+		public void RevealShotSpot(IntVec3 cell, float muzzleScale)
+		{
+			if (map == null || !cell.IsValid || !cell.InBounds(map)) return;
+			int tick = GenTicks.TicksGame;
+			int index = cellIndices.CellToIndex(cell);
+			if (shotRevealLastTick == null) return;
+			if (tick - shotRevealLastTick[index] < SHOT_REVEAL_COOLDOWN_TICKS) return;
+			shotRevealLastTick[index] = tick;
+			float radius = Mathf.Lerp(1.4f, 3f, Mathf.Clamp01(muzzleScale / 6f));
+			RevealSpot(cell, radius, SHOT_REVEAL_DURATION_TICKS, applyRangeMultiplier: false);
+		}
+
 		public override void MapRemoved()
 		{
 			// restore any modified vanilla fog before removing
 			RestoreAllAppliedWarFog();
+			sightGlowBuckets = null;
+			shotRevealLastTick = null;
 			map.events.RegionsRoomsChanged -= OnRegionsRoomsChanged;
 			alive = false;
 			asyncActions.Kill();

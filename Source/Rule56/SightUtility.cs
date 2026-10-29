@@ -8,23 +8,35 @@ namespace CombatAI
 {
     public static class SightUtility
     {
+        private const float DOWNED_SIGHT_FACTOR = 0.35f;
+        private const int DOWNED_MIN_SIGHT = 2;
+        private static StatDef cachedNightVisionEfficiencyStat;
+        private static StatDef cachedNightVisionEfficiencyApparelStat;
+        private static bool nightVisionStatsResolved;
+
+        internal static bool NewSightSystemActive => Finder.Settings.FogOfWar_Enabled && Finder.Settings.NewSightSystem_Enabled;
         /// <summary>Rectangular maps, including vehicle interiors, cannot use the square-grid fallback.</summary>
         internal static bool SupportsMap(Map map)
         {
             return map != null && map.Size.x == map.Size.z;
         }
 
-	    public static float GetSightRadius_Fast(Thing thing)
-	    {
-		    if (!TKVCache<Thing, SightGrid.ISightRadius, float>.TryGet(thing, out float val, 12000))
-		    {
-			    TKVCache<Thing, SightGrid.ISightRadius, float>.Put(thing, val = GetSightRadius(thing).sight);
-		    }
-		    return val;
-	    }
-	    
+        public static float GetSightRadius_Fast(Thing thing)
+        {
+            bool unifiedSight = NewSightSystemActive;
+            int expiry = unifiedSight ? 45 : 12000;
+            if (!TKVCache<Thing, SightGrid.ISightRadius, SightGrid.ISightRadius>.TryGet(thing, out SightGrid.ISightRadius radius, expiry)
+                || radius.usesNewSightSystem != unifiedSight)
+            {
+                radius = GetSightRadius(thing);
+                TKVCache<Thing, SightGrid.ISightRadius, SightGrid.ISightRadius>.Put(thing, radius);
+            }
+            return radius.sight;
+        }
+
 	    public static SightGrid.ISightRadius GetSightRadius(Thing thing)
         {
+            bool                   unifiedSight = NewSightSystemActive;
             bool                   isSmartPawn = false;
             SightGrid.ISightRadius result;
             ThingComp_Sighter      sighter = thing.GetComp_Fast<ThingComp_Sighter>();
@@ -35,14 +47,14 @@ namespace CombatAI
 
                 if (f != null && (f.IsPlayerSafe() || (!f.HostileTo(Faction.OfPlayer) && Finder.Settings.FogOfWar_Allies)))
                 {
-                    result.fog = Maths.Max(Mathf.CeilToInt(GetFogRadius(thing, result.sight) * Finder.Settings.FogOfWar_RangeMultiplier), 3);
+                    result.fog = unifiedSight ? result.sight : Maths.Max(Mathf.CeilToInt(GetFogRadius(thing, result.sight) * Finder.Settings.FogOfWar_RangeMultiplier), 3);
                 }
             }
             else if (thing is Pawn pawn)
             {
                 result = GetSightRadius_Pawn(pawn);
                 Faction f = thing.Faction;
-                isSmartPawn = !pawn.RaceProps.Animal && !(pawn.Dead || pawn.Downed);
+                isSmartPawn = !unifiedSight && !pawn.RaceProps.Animal && !(pawn.Dead || pawn.Downed);
                 if (f != null && (f.IsPlayerSafe() || (!f.HostileTo(Faction.OfPlayer) && Finder.Settings.FogOfWar_Allies)))
                 {
                     if (pawn.RaceProps.Animal)
@@ -56,7 +68,7 @@ namespace CombatAI
                             goto finalize;
                         }
                     }
-                    result.fog = Maths.Max(Mathf.CeilToInt(GetFogRadius(thing, result.sight) * Finder.Settings.FogOfWar_RangeMultiplier), 3);
+                    result.fog = unifiedSight ? result.sight : Maths.Max(Mathf.CeilToInt(GetFogRadius(thing, result.sight) * Finder.Settings.FogOfWar_RangeMultiplier), 3);
                 }
             }
             else if (thing is Building_Turret turret)
@@ -68,7 +80,7 @@ namespace CombatAI
 
                     if (f != null && (f.IsPlayerSafe() || (!f.HostileTo(Faction.OfPlayer) && Finder.Settings.FogOfWar_Allies)))
                     {
-                        result.fog = Maths.Max(Mathf.CeilToInt(GetFogRadius(thing, result.sight) * Finder.Settings.FogOfWar_RangeMultiplier), 3);
+                        result.fog = unifiedSight ? result.sight : Maths.Max(Mathf.CeilToInt(GetFogRadius(thing, result.sight) * Finder.Settings.FogOfWar_RangeMultiplier), 3);
                     }
                 }
             }
@@ -83,17 +95,27 @@ namespace CombatAI
                 result.sight = result.sight + 8;
             }
             result.createdAt = GenTicks.TicksGame;
-            TKVCache<int, SightGrid.ISightRadius, float>.Put(thing.thingIDNumber, result.sight);
+            result.usesNewSightSystem = unifiedSight;
             return result;
         }
 
         private static SightGrid.ISightRadius GetSightRadius_Pawn(Pawn pawn)
         {
             SightGrid.ISightRadius result = new SightGrid.ISightRadius();
+            if (NewSightSystemActive)
+            {
+                float baseRadius = Mathf.Clamp(Finder.Settings.NewSightSystem_BaseRadius, 10f, 60f);
+                float radius = Mathf.Max(GetFogRadius(pawn, baseRadius), GetMinimumSightRadiusForDefeatSensitiveMap(pawn));
+                result.sight = Mathf.CeilToInt(Mathf.Max(radius, 3f));
+                result.scan = result.sight;
+                ApplyDownedSightPenalty(pawn, ref result);
+                return result;
+            }
             if (pawn.RaceProps.Animal && pawn.Faction == null)
             {
                 result.sight = Mathf.FloorToInt(Mathf.Clamp(pawn.BodySize * 3f, 2f, 10f));
                 result.scan  = result.sight;
+                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             Verb verb = pawn.TryGetAttackVerb();
@@ -101,6 +123,7 @@ namespace CombatAI
             {
                 result.sight = 4;
                 result.scan  = 0;
+                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             if (pawn.RaceProps.Insect || pawn.RaceProps.IsMechanoid || pawn.RaceProps.Animal)
@@ -109,10 +132,12 @@ namespace CombatAI
                 {
                     result.sight = 10;
                     result.scan  = 0;
+                    ApplyDownedSightPenalty(pawn, ref result);
                     return result;
                 }
                 result.scan  = Mathf.CeilToInt(verb.EffectiveRange + 10f);
                 result.sight = Maths.Max((int)verb.EffectiveRange, 5);
+                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             if (verb.IsMeleeAttack)
@@ -128,6 +153,7 @@ namespace CombatAI
                     result.sight = 5;
                     result.scan  = 0;
                 }
+                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             result.scan  = Mathf.CeilToInt(verb.EffectiveRange);
@@ -139,12 +165,21 @@ namespace CombatAI
                 skill = shooting.Level;
             }
             result.sight = Mathf.CeilToInt(Maths.Max(result.sight * Mathf.Clamp(skill / 7.5f, 0.778f, 1.425f), 4));
+            ApplyDownedSightPenalty(pawn, ref result);
             return result;
         }
 
         private static SightGrid.ISightRadius GetSightRadius_Turret(Building_Turret turret)
         {
             SightGrid.ISightRadius result = new SightGrid.ISightRadius();
+            if (NewSightSystemActive)
+            {
+                float baseRadius = Mathf.Clamp(Finder.Settings.NewSightSystem_BaseRadius, 10f, 60f);
+                float turretFactor = Mathf.Clamp(Finder.Settings.NewSightSystem_TurretFactor, 0.1f, 1f);
+                result.sight = Mathf.CeilToInt(Mathf.Max(baseRadius * turretFactor, 3f));
+                result.scan = result.sight;
+                return result;
+            }
             Verb                   verb   = turret.AttackVerb;
             if (verb != null)
             {
@@ -175,7 +210,7 @@ namespace CombatAI
             }
             if (pawn != null)
             {
-                if (pawn.Downed || GenTicks.TicksGame - CombatAI.Compatibility.NeedCompat.GetLastRestTick(pawn.needs?.rest) < 120)
+                if (pawn.Downed)
                 {
                     return 3;
                 }
@@ -187,6 +222,42 @@ namespace CombatAI
                 return Maths.Max(Maths.Max(sightRadius, 10) * mul, 3);
             }
             return sightRadius;
+        }
+
+        private static void ApplyDownedSightPenalty(Pawn pawn, ref SightGrid.ISightRadius result)
+        {
+            if (pawn == null || !pawn.Downed) return;
+            result.sight = Mathf.Max(DOWNED_MIN_SIGHT, Mathf.CeilToInt(result.sight * DOWNED_SIGHT_FACTOR));
+            if (result.scan > 0)
+                result.scan = Mathf.Max(DOWNED_MIN_SIGHT, Mathf.CeilToInt(result.scan * DOWNED_SIGHT_FACTOR));
+            result.scan = Mathf.Min(result.scan, result.sight);
+        }
+
+        internal static float GetNightVisionLutReduction(Thing thing)
+        {
+            Pawn pawn = thing as Pawn;
+            if (pawn == null && thing is Building_Turret turret)
+                pawn = turret.GetComp_Fast<CompMannable>()?.ManningPawn;
+            if (pawn == null) return 0f;
+            if (!nightVisionStatsResolved)
+            {
+                nightVisionStatsResolved = true;
+                cachedNightVisionEfficiencyStat = DefDatabase<StatDef>.GetNamedSilentFail("NightVisionEfficiency");
+                cachedNightVisionEfficiencyApparelStat = DefDatabase<StatDef>.GetNamedSilentFail("NightVisionEfficiency_Apparel");
+            }
+            float efficiency = 0f;
+            if (cachedNightVisionEfficiencyStat != null)
+                efficiency = Mathf.Max(efficiency, pawn.GetStatValue(cachedNightVisionEfficiencyStat));
+            if (cachedNightVisionEfficiencyApparelStat != null)
+                efficiency = Mathf.Max(efficiency, pawn.GetStatValue(cachedNightVisionEfficiencyApparelStat));
+            return Mathf.Clamp01(efficiency);
+        }
+
+        private static float GetMinimumSightRadiusForDefeatSensitiveMap(Pawn pawn)
+        {
+            Map map = pawn?.MapHeld;
+            if (map == null || map.IsPlayerHome || pawn.Faction == null || !pawn.Faction.IsPlayerSafe()) return 0f;
+            return map.generatorDef != null && map.generatorDef.defeatRequiresCantReachUnfogged ? 8f : 0f;
         }
 
         public static void ClearCache()

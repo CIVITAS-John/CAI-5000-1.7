@@ -60,6 +60,10 @@ namespace CombatAI
 
         public override void WriteSettings()
         {
+            if (!Finder.Settings.FogOfWar_Enabled)
+            {
+                Finder.Settings.NewSightSystem_Enabled = false;
+            }
             // Protect settings file writes from concurrent access and transient sharing violations.
             lock (_settingsFileLock)
             {
@@ -309,7 +313,36 @@ namespace CombatAI
 
         private void FillCollapsible_FogOfWar(Listing_Collapsible collapsible)
         {
+            bool fogWasEnabled = Finder.Settings.FogOfWar_Enabled;
             collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_Enable, ref Finder.Settings.FogOfWar_Enabled);
+            if (!fogWasEnabled && Finder.Settings.FogOfWar_Enabled)
+            {
+                Finder.Settings.NewSightSystem_Enabled = true;
+            }
+            bool fogEnabled = Finder.Settings.FogOfWar_Enabled;
+            if (!fogEnabled)
+            {
+                Finder.Settings.NewSightSystem_Enabled = false;
+            }
+            collapsible.Line(1);
+            collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_Enable, ref Finder.Settings.NewSightSystem_Enabled, Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description, disabled: !fogEnabled);
+            if (!fogEnabled)
+            {
+                collapsible.Label($"<color=#aaaaaa>{Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog}</color>");
+            }
+            collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius);
+            if (fogEnabled && Finder.Settings.NewSightSystem_Enabled)
+            {
+                collapsible.Lambda(25, rect =>
+                {
+                    Finder.Settings.NewSightSystem_BaseRadius = HorizontalSlider_NewTemp(rect, Finder.Settings.NewSightSystem_BaseRadius, 10f, 60f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout.Formatted(Mathf.RoundToInt(Finder.Settings.NewSightSystem_BaseRadius)), 0.05f);
+                }, useMargins: true);
+            }
+            else
+            {
+                collapsible.Label($"<color=#aaaaaa>{Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout.Formatted(Mathf.RoundToInt(Finder.Settings.NewSightSystem_BaseRadius))}</color>");
+            }
+            collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing, ref Finder.Settings.NewSightSystem_ShowSightRing, Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description, disabled: !fogEnabled);
 
             if (Finder.Settings.FogOfWar_Enabled)
             {
@@ -325,29 +358,27 @@ namespace CombatAI
                 collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_Allies, ref Finder.Settings.FogOfWar_Allies);
                 collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_Turrets, ref Finder.Settings.FogOfWar_Turrets);
 
-                collapsible.Line(1);
-
-                collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_Density);
-                collapsible.Lambda(25, rect =>
+                if (!Finder.Settings.NewSightSystem_Enabled)
                 {
-                    Finder.Settings.FogOfWar_FogColor = HorizontalSlider_NewTemp(rect, Finder.Settings.FogOfWar_FogColor, 0.0f, 1.0f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_Density_Readouts.Formatted(Finder.Settings.FogOfWar_FogColor.ToString()), 0.05f);
-                }, useMargins: true);
+                    collapsible.Line(1);
+                    collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_Density);
+                    collapsible.Lambda(25, rect =>
+                    {
+                        Finder.Settings.FogOfWar_FogColor = HorizontalSlider_NewTemp(rect, Finder.Settings.FogOfWar_FogColor, 0.0f, 1.0f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_Density_Readouts.Formatted(Finder.Settings.FogOfWar_FogColor.ToString()), 0.05f);
+                    }, useMargins: true);
 
-//				collapsible.Line(1);
+                    collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_RangeMul);
+                    collapsible.Lambda(25, rect =>
+                    {
+                        Finder.Settings.FogOfWar_RangeMultiplier = HorizontalSlider_NewTemp(rect, Finder.Settings.FogOfWar_RangeMultiplier, 0.75f, 8.0f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_RangeMul_Readouts.Formatted(Finder.Settings.FogOfWar_RangeMultiplier.ToString()), 0.05f);
+                    }, useMargins: true);
 
-                collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_RangeMul);
-                collapsible.Lambda(25, rect =>
-                {
-                    Finder.Settings.FogOfWar_RangeMultiplier = HorizontalSlider_NewTemp(rect, Finder.Settings.FogOfWar_RangeMultiplier, 0.75f, 8.0f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_RangeMul_Readouts.Formatted(Finder.Settings.FogOfWar_RangeMultiplier.ToString()), 0.05f);
-                }, useMargins: true);
-
-//				collapsible.Line(1);
-
-                collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_FadeMul);
-                collapsible.Lambda(25, rect =>
-                {
-                    Finder.Settings.FogOfWar_RangeFadeMultiplier = HorizontalSlider_NewTemp(rect, Finder.Settings.FogOfWar_RangeFadeMultiplier, 0.0f, 1.0f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_FadeMul_Readouts.Formatted(Finder.Settings.FogOfWar_RangeFadeMultiplier.ToString()), 0.05f);
-                }, useMargins: true);
+                    collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_FadeMul);
+                    collapsible.Lambda(25, rect =>
+                    {
+                        Finder.Settings.FogOfWar_RangeFadeMultiplier = HorizontalSlider_NewTemp(rect, Finder.Settings.FogOfWar_RangeFadeMultiplier, 0.0f, 1.0f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_FadeMul_Readouts.Formatted(Finder.Settings.FogOfWar_RangeFadeMultiplier.ToString()), 0.05f);
+                    }, useMargins: true);
+                }
 
                 if (Current.ProgramState == ProgramState.Playing && Find.CurrentMap != null)
                 {

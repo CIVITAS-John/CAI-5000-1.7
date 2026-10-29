@@ -10,6 +10,9 @@ namespace CombatAI
 {
 	public class SightGrid
 	{
+		private const int NEW_SIGHT_RADIUS_REFRESH_TICKS = 45;
+		private const int SIGHT_GLOW_BUCKET_COUNT = 16;
+		private static readonly float[] sightGlowCoeffLut = BuildSightGlowCoeffLut();
 		private readonly AsyncActions               asyncActions;
 		private readonly IBuckets<IBucketableThing> buckets;
 		private readonly List<Vector3>              buffer = new List<Vector3>(1024);
@@ -35,6 +38,10 @@ namespace CombatAI
 			public float rSqr_fog;
 			public float rSqr_fade;
 			public MapComponent_FogGrid fogComp;
+			public byte[] glowBuckets;
+			public byte sourceGlowBucket;
+			public float nightVisionReduction;
+			public bool useGlowAdaptiveRange;
 		}
 		/// <summary>
 		///     Sight grid contains all sight data.
@@ -439,9 +446,16 @@ namespace CombatAI
 		{
 			float d2         = sightScan.pos.DistanceToSquared(cell);
 			float visibility = 0f;
+			float rangeFactor = 1f;
+			if (sightScan.useGlowAdaptiveRange && sightScan.fogComp != null)
+			{
+				byte targetGlow = sightScan.fogComp.GetSightGlowBucket(cell, sightScan.glowBuckets);
+				rangeFactor = GetSightGlowCoefficient(sightScan.sourceGlowBucket, targetGlow, sightScan.nightVisionReduction);
+			}
+			float rangeFactorSqr = rangeFactor * rangeFactor;
 			if (!sightScan.engagedInMelee)
 			{
-				if (d2 < sightScan.rSqr_sight)
+				if (d2 < sightScan.rSqr_sight * rangeFactorSqr)
 				{
 					visibility = Maths.Max(1f - coverRating, 0.20f);
 					if (visibility > 0f)
@@ -456,21 +470,21 @@ namespace CombatAI
 					grid_regions.Set(cell);
 				}
 			}
-			if (playerAlliance && d2 < sightScan.rSqr_fog)
+			if (playerAlliance && d2 < sightScan.rSqr_fog * rangeFactorSqr)
 			{
 				float d3 = Maths.Sqr(sightScan.drawPos.x - cell.x) + Maths.Sqr(sightScan.drawPos.z - cell.z);
 				float val;
-				if (d3 < sightScan.rSqr_fade)
+				if (d3 < sightScan.rSqr_fade * rangeFactorSqr)
 				{
 					val = 1f;
 				}
 				else
 				{
-					val = 1f - Mathf.Clamp01((Maths.Sqrt_Fast(d3, 5) - sightScan.r_fade) / sightScan.d_fade);
+					val = 1f - Mathf.Clamp01((Maths.Sqrt_Fast(d3, 5) - sightScan.r_fade * rangeFactor) / (sightScan.d_fade * rangeFactor + 0.001f));
 				}
 				gridFog?.Set(cell, val);
 			}
-			if (sightScan.scanForEnemies && d2 < sightScan.rSqr_scan)
+			if (sightScan.scanForEnemies && d2 < sightScan.rSqr_scan * rangeFactorSqr)
 			{
 				// Skip spotting if this cell is currently fogged for the player.
 				if (sightScan.fogComp != null && sightScan.fogComp.IsFogged(cell))
@@ -521,7 +535,10 @@ namespace CombatAI
 			{
 				return false;
 			}
-			if (!item.cachedSightRadius.IsValid)
+			bool unifiedSight = SightUtility.NewSightSystemActive;
+			int ticks = GenTicks.TicksGame;
+			if (!item.cachedSightRadius.IsValid || item.cachedSightRadius.usesNewSightSystem != unifiedSight
+				|| unifiedSight && ticks - item.cachedSightRadius.createdAt >= NEW_SIGHT_RADIUS_REFRESH_TICKS)
 			{
 				item.cachedSightRadius = SightUtility.GetSightRadius(item.thing);
 			}
@@ -533,7 +550,6 @@ namespace CombatAI
 			{
 				item.cachedDamage = DamageUtility.GetDamageReport(item.thing);
 			}
-			int     ticks  = GenTicks.TicksGame;
 			IntVec3 origin = item.thing.Position;
 			IntVec3 pos    = GetShiftedPosition(item.thing, (int)Maths.Min(settings.interval * settings.buckets * Find.TickManager.TickRateMultiplier, 90), item.path);
 			if (!pos.InBounds(map))
@@ -605,6 +621,11 @@ namespace CombatAI
 			Vector3 drawPos = item.thing.DrawPos;
 			scanForEnemies &= !engagedInMelee;
 			ISightRadius sightRadius = item.cachedSightRadius;
+			// Resolve pawn stats and capture lighting on the main thread before queueing work.
+			float nightVisionReduction = unifiedSight ? SightUtility.GetNightVisionLutReduction(item.thing) : 0f;
+			var fogComp = map.GetComponent<MapComponent_FogGrid>();
+			byte[] glowBuckets = unifiedSight ? fogComp?.SightGlowBuckets : null;
+			byte sourceGlowBucket = fogComp != null ? fogComp.GetSightGlowBucket(pos, glowBuckets) : (byte)15;
 			Action action = () =>
 			{
 				if (destroyed) return;
@@ -637,7 +658,6 @@ namespace CombatAI
 				MetaCombatAttribute attr = item.cachedDamage.attributes | availability;
 				grid.Next(pos, item.thing.GetThingFlags(), item.cachedDamage.adjustedSharp, item.cachedDamage.adjustedBlunt, attr);
 				grid_regions.Next();
-				var fogComp = map.GetComponent<MapComponent_FogGrid>();
 				// Both visitors finish on this grid's single worker before the next cast starts.
 				// The queued main-thread continuation below keeps its own per-request closure.
 				sightScan = new SightScanState
@@ -653,6 +673,10 @@ namespace CombatAI
 					rSqr_fog = rSqr_fog,
 					rSqr_fade = rSqr_fade,
 					fogComp = fogComp,
+					glowBuckets = glowBuckets,
+					sourceGlowBucket = sourceGlowBucket,
+					nightVisionReduction = nightVisionReduction,
+					useGlowAdaptiveRange = unifiedSight,
 					reader = reader,
 					item = item,
 				};
@@ -708,6 +732,27 @@ namespace CombatAI
 			asyncActions.EnqueueOffThreadAction(action);
 			item.lastCycle = grid.CycleNum;
 			return true;
+		}
+
+		private static float[] BuildSightGlowCoeffLut()
+		{
+			float[] coefficients = new float[SIGHT_GLOW_BUCKET_COUNT * SIGHT_GLOW_BUCKET_COUNT];
+			for (int source = 0; source < SIGHT_GLOW_BUCKET_COUNT; source++)
+			{
+				float sourceGlow = source / (float)(SIGHT_GLOW_BUCKET_COUNT - 1);
+				for (int target = 0; target < SIGHT_GLOW_BUCKET_COUNT; target++)
+				{
+					float targetGlow = target / (float)(SIGHT_GLOW_BUCKET_COUNT - 1);
+					coefficients[source * SIGHT_GLOW_BUCKET_COUNT + target] = Mathf.Clamp01(0.5f + sourceGlow * 0.2f + targetGlow * 0.4f);
+				}
+			}
+			return coefficients;
+		}
+
+		private static float GetSightGlowCoefficient(byte source, byte target, float nightVisionReduction)
+		{
+			float coefficient = sightGlowCoeffLut[source * SIGHT_GLOW_BUCKET_COUNT + target];
+			return 1f - (1f - coefficient) * (1f - nightVisionReduction);
 		}
 
 		private void NotifySpottings(IBucketableThing item)
@@ -864,6 +909,7 @@ namespace CombatAI
 			///     Creation tick timestamp.
 			/// </summary>
 			public int createdAt;
+			public bool usesNewSightSystem;
 			/// <summary>
 			///     Whether this is a valid report.
 			/// </summary>

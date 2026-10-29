@@ -10,6 +10,7 @@ namespace CombatAI
     {
 
         private const int version                             = 15;
+        internal const int QuickSetupRequiredRevision = 1;
         public        int Advanced_SightThreadIdleSleepTimeMS = 1;
 
         /*
@@ -67,6 +68,11 @@ namespace CombatAI
         public float FogOfWar_RangeMultiplier     = 1.8f;
         public bool  FogOfWar_Turrets             = true;
 
+        public bool  NewSightSystem_Enabled;
+        public float NewSightSystem_BaseRadius = 30f;
+        public float NewSightSystem_TurretFactor = 0.5f;
+        public bool  NewSightSystem_ShowSightRing = true;
+
         /*                 
          * -- * -- * -- * -- * -- * -- * -- * -- * --
          */
@@ -84,6 +90,7 @@ namespace CombatAI
         public int   Pathfinding_SquadPathWidth = 4;
         public bool  PerformanceOpt_Enabled     = true;
         public bool  FinishedQuickSetup;
+        public int   QuickSetupRevisionCompleted;
 
         private Dictionary<string, DefKindAISettings>                  _raceSettings     = new ();
         private Dictionary<(ThingDef, PawnKindDef), DefKindAISettings> _raceSettingsTemp = new ();
@@ -100,6 +107,24 @@ namespace CombatAI
         public Settings()
         {
             ResetTechSettings();
+        }
+
+        public void ResetAdvancedAndDebugOptionsToDefaults()
+        {
+            AdvancedUser = false;
+            Debug = false;
+            Debug_LogJobs = false;
+            Debug_DebugDumpData = false;
+            Debug_DebugThingsTracker = false;
+            Debug_DrawAvoidanceGrid_Danger = false;
+            Debug_DrawAvoidanceGrid_Proximity = false;
+            Debug_DrawShadowCasts = false;
+            Debug_DrawShadowCastsVectors = false;
+            Debug_DrawThreatCasts = false;
+            Debug_DisablePawnGuiOverlay = false;
+            Debug_DebugPathfinding = false;
+            Debug_DebugAvailability = false;
+            Debug_ValidateSight = false;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -193,6 +218,7 @@ namespace CombatAI
 			Scribe_Collections.Look(ref _raceSettings, "raceSettings2");
 			_raceSettings ??= new Dictionary<string, DefKindAISettings>();
             Scribe_Values.Look(ref FinishedQuickSetup, $"FinishedQuickSetup2.{version}");
+            Scribe_Values.Look(ref QuickSetupRevisionCompleted, "QuickSetupRevisionCompleted");
             Scribe_Values.Look(ref Personalities_Enabled, $"Personalities_Enabled.{version}", true);
             
             Scribe_Values.Look(ref Caster_Enabled, $"Caster_Enabled.{version}", true);
@@ -219,6 +245,23 @@ namespace CombatAI
             Scribe_Values.Look(ref FogOfWar_AnimalsSmartOnly, $"FogOfWar_AnimalsSmartOnly.{version}", true);
             Scribe_Values.Look(ref FogOfWar_Allies, $"FogOfWar_Allies.{version}", true);
             Scribe_Values.Look(ref Pathfinding_SappingMul, $"Pathfinding_SappingMul2.{version}", 1.0f);
+
+            Scribe_Values.Look(ref NewSightSystem_Enabled, $"NewSightSystem_Enabled.{version}");
+            Scribe_Values.Look(ref NewSightSystem_BaseRadius, $"NewSightSystem_BaseRadius.{version}", 30f);
+            Scribe_Values.Look(ref NewSightSystem_TurretFactor, $"NewSightSystem_TurretFactor.{version}", 0.5f);
+            Scribe_Values.Look(ref NewSightSystem_ShowSightRing, $"NewSightSystem_ShowSightRing.{version}", true);
+            NewSightSystem_BaseRadius = Math.Max(10f, Math.Min(60f, NewSightSystem_BaseRadius));
+            NewSightSystem_TurretFactor = Math.Max(0.1f, Math.Min(1f, NewSightSystem_TurretFactor));
+            if (!FogOfWar_Enabled)
+            {
+                NewSightSystem_Enabled = false;
+            }
+            if (QuickSetupRevisionCompleted < QuickSetupRequiredRevision)
+            {
+                FinishedQuickSetup = false;
+                QuickSetupRevisionCompleted = QuickSetupRequiredRevision;
+                ResetAdvancedAndDebugOptionsToDefaults();
+            }
 
             //ScribeValues(); // Scribe values. (Will not scribe IExposables nor enums)
 

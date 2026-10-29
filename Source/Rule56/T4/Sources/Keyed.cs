@@ -1154,5 +1154,104 @@ namespace CombatAI.R
             get => _CombatAI_Settings_FactionTech_Group != null ?
                    _CombatAI_Settings_FactionTech_Group : _CombatAI_Settings_FactionTech_Group = "CombatAI.Settings.FactionTech.Group".Translate();
         }
+
+        private static TaggedString _CombatAI_Quick_NewSight_Title = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Quick.NewSight.Title</c>. inner text:
+        ///
+        /// <code>New sight system guide</code>
+        /// </summary>
+        public static TaggedString CombatAI_Quick_NewSight_Title
+        {
+            get => _CombatAI_Quick_NewSight_Title != null ?
+                   _CombatAI_Quick_NewSight_Title : _CombatAI_Quick_NewSight_Title = "CombatAI.Quick.NewSight.Title".Translate();
+        }
+
+        private static TaggedString _CombatAI_Quick_NewSight_Description = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Quick.NewSight.Description</c>. inner text:
+        ///
+        /// <code>Hover a weapon gizmo to preview the green sight ring. In the new system, fog reveal radius is kept identical to actual sight radius.</code>
+        /// </summary>
+        public static TaggedString CombatAI_Quick_NewSight_Description
+        {
+            get => _CombatAI_Quick_NewSight_Description != null ?
+                   _CombatAI_Quick_NewSight_Description : _CombatAI_Quick_NewSight_Description = "CombatAI.Quick.NewSight.Description".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.Enable</c>. inner text:
+        ///
+        /// <code>Enable unified sight system</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_Enable
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable : _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable = "CombatAI.Settings.Basic.FogOfWar.NewSight.Enable".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.Enable.Description</c>. inner text:
+        ///
+        /// <code>Use a shared team-vision model for targeting. Units cannot attack targets outside team sight even if weapon range is sufficient.</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description : _CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description = "CombatAI.Settings.Basic.FogOfWar.NewSight.Enable.Description".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.RequireFog</c>. inner text:
+        ///
+        /// <code>Enable fog of war first to use the new sight system.</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog : _CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog = "CombatAI.Settings.Basic.FogOfWar.NewSight.RequireFog".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius</c>. inner text:
+        ///
+        /// <code>Unified base sight radius</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius : _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius = "CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius.Readout</c>. inner text:
+        ///
+        /// <code>{0} cells</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout : _CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout = "CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius.Readout".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing</c>. inner text:
+        ///
+        /// <code>Show sight ring with attack range</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing : _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing = "CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing".Translate();
+        }
+
+        private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description = null;
+        /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description</c>. inner text:
+        ///
+        /// <code>When selecting a pawn or turret, draw the sight range ring together with the attack range ring.</code>
+        /// </summary>
+        public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description
+        {
+            get => _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description != null ?
+                   _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description : _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description = "CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description".Translate();
+        }
     }
 }

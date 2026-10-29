@@ -10,18 +10,17 @@ namespace CombatAI.Patches
     	[HarmonyPatch(typeof(FleckMaker), nameof(FleckMaker.Static), new []{typeof(IntVec3), typeof(Map), typeof(FleckDef), typeof(float)})]
     	private static class FleckMaker_Static_Patch
     	{
-    		// Original: only reveal ShotFlash spots; add debug logging for suspicious flecks
     		public static void Prefix(IntVec3 cell, Map map, FleckDef fleckDef, float scale)
     		{
 
-				if (Finder.Settings.FogOfWar_Enabled && fleckDef == FleckDefOf.ShotFlash && cell != FleckMakerCE_Patch.Current)
+				if (Finder.Settings != null && Finder.Settings.FogOfWar_Enabled && fleckDef == FleckDefOf.ShotFlash && cell != FleckMakerCE_Patch.Current)
 				{
 					if (map != null)
 					{
 						MapComponent_FogGrid grid = map.GetComp_Fast<MapComponent_FogGrid>();
 						if (grid != null)
 						{
-							grid.RevealSpot(cell, Maths.Max(scale, 3f), Rand.Range(120, 240));
+							grid.RevealShotSpot(cell, scale);
 						}
 					}
 				}
@@ -33,7 +32,7 @@ namespace CombatAI.Patches
         {
             public static bool Prefix(IntVec3 cell, Map map)
             {
-                return !Finder.Settings.FogOfWar_Enabled || !(map.GetComp_Fast<MapComponent_FogGrid>()?.IsFogged(cell) ?? false);
+                return Finder.Settings == null || !Finder.Settings.FogOfWar_Enabled || map == null || !(map.GetComp_Fast<MapComponent_FogGrid>()?.IsFogged(cell) ?? false);
             }
         }
 
@@ -42,7 +41,7 @@ namespace CombatAI.Patches
         {
             public static bool Prefix(IntVec3 loc, Map map)
             {
-                return !Finder.Settings.FogOfWar_Enabled || !(map.GetComp_Fast<MapComponent_FogGrid>()?.IsFogged(loc) ?? false);
+                return Finder.Settings == null || !Finder.Settings.FogOfWar_Enabled || map == null || !(map.GetComp_Fast<MapComponent_FogGrid>()?.IsFogged(loc) ?? false);
             }
         }
 
@@ -51,7 +50,7 @@ namespace CombatAI.Patches
 		{
 			public static bool Prefix(IntVec3 loc, Map map)
 			{
-				if (!Finder.Settings.FogOfWar_Enabled) return true;
+				if (Finder.Settings == null || !Finder.Settings.FogOfWar_Enabled) return true;
 				if (map == null) return true;
 				var comp = map.GetComp_Fast<MapComponent_FogGrid>();
 				if (comp == null) return true;
@@ -67,7 +66,7 @@ namespace CombatAI.Patches
 			public static bool Prefix(Vector3 loc, Map map, float throwAngle, Vector3 inheritVelocity)
 			{
 				IntVec3 cell = loc.ToIntVec3();
-				if (!Finder.Settings.FogOfWar_Enabled) return true;
+				if (Finder.Settings == null || !Finder.Settings.FogOfWar_Enabled) return true;
 				if (map == null) return true;
 				var comp = map.GetComp_Fast<MapComponent_FogGrid>();
 				if (comp == null) return true;
