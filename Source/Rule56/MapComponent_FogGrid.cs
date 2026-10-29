@@ -22,22 +22,26 @@ namespace CombatAI
 	[StaticConstructorOnStartup]
 	public class MapComponent_FogGrid : MapComponent
 	{
-		private const int SECTION_SIZE = 16;
+		// Matches ITFloatGrid blocks so a section can test its sight blocks directly.
+		private const int SECTION_SIZE = ITFloatGrid.BLOCK_SIZE;
+		private const int PADDED_SECTION_SIZE = SECTION_SIZE + 2;
 		private const int SIGHT_GLOW_BLOCK_SIZE = 6;
 		internal const int SIGHT_GLOW_BUCKET_COUNT = 16;
 		private const int SIGHT_GLOW_REFRESH_INTERVAL = 15;
 		private const int SHOT_REVEAL_COOLDOWN_TICKS = 20;
 		private const int SHOT_REVEAL_DURATION_TICKS = 90;
 		private readonly int mapSizeX, mapSizeZ;
+		private readonly bool supportsMap;
 		private readonly int sightGlowBlocksX, sightGlowBlocksZ;
 		private volatile byte[] sightGlowBuckets;
 		private int sightGlowLastRefreshTick = -9999;
 		private int[] shotRevealLastTick;
 		private readonly object fogLock = new object();
-		private readonly HashSet<int> pendingChanges = new HashSet<int>();
-		private readonly HashSet<IntVec2> dirtyNativeSections = new HashSet<IntVec2>();
 		private bool floodUnfogPending;
 		private int indoorRevision = 1, rebuiltIndoorRevision;
+		// Bumped whenever fogState or the indoor caches change outside a section update,
+		// so settled sections know to run again.
+		private int stateRevision;
 		private bool previousIndoorVisible;
 		private bool previousIndoorHome;
 
@@ -106,6 +110,7 @@ namespace CombatAI
 			cellIndices  = map.cellIndices;
 			mapSizeX = map.Size.x;
 			mapSizeZ = map.Size.z;
+			supportsMap = SightUtility.SupportsMap(map);
 			mapRect      = new Rect(0, 0, mapSizeX, mapSizeZ);
 			fogState     = new CellFogState[map.cellIndices.NumGridCells];
 			shotRevealLastTick = new int[map.cellIndices.NumGridCells];
@@ -214,25 +219,25 @@ namespace CombatAI
 
 		public bool IsFogged(IntVec3 cell)
 		{
-			if (map == null || fogState == null || !cell.IsValid || !cell.InBounds(map)) return false;
-			return IsFogged(cellIndices.CellToIndex(cell));
+			if (!cell.IsValid || (uint)cell.x >= (uint)mapSizeX || (uint)cell.z >= (uint)mapSizeZ) return false;
+			return IsFogged(cell.z * mapSizeX + cell.x);
 		}
 		public bool IsFogged(int index)
 		{
-			if (!SightUtility.SupportsMap(map)) return false;
+			if (!supportsMap) return false;
 			Settings settings = Finder.Settings;
 			if (settings == null || !settings.FogOfWar_Enabled || fogState == null || (uint)index >= (uint)fogState.Length)
 			{
 				return false;
 			}
 			bool isPlayerHome = _cachedIsPlayerHome;
-			if (Finder.Settings.FogOfWar_DisableOnPlayerMap && isPlayerHome)
+			if (settings.FogOfWar_DisableOnPlayerMap && isPlayerHome)
 			{
 				return map.fogGrid?.IsFogged(index) ?? false;
 			}
 			if (isPlayerHome)
 			{
-				if (Finder.Settings.FogOfWar_IndoorVisible)
+				if (settings.FogOfWar_IndoorVisible)
 				{
 					bool[] cache = _indoorRoomCache;
 					if (cache != null && index >= 0 && index < cache.Length && cache[index])
@@ -276,11 +281,7 @@ namespace CombatAI
 							}
 						}
 					}
-					if (map?.mapDrawer != null)
-					{
-						foreach (var cell in map.AllCells)
-							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-					}
+					Interlocked.Increment(ref stateRevision);
 					if (Finder.Settings.Debug)
 						Log.Message($"MapComponent_FogGrid: cleared {cleared} CAIFogged cells for map {map}");
 				}
@@ -319,7 +320,6 @@ namespace CombatAI
 				}
 				// ensure any queued main-thread actions run
 				asyncActions.ExecuteMainThreadActions();
-				FlushFogChanges();
 			}
 		}
 
@@ -332,15 +332,8 @@ namespace CombatAI
 			asyncActions.EnqueueMainThreadAction(() =>
 			{
 				floodUnfogPending = false;
-				lock (fogLock)
-				{
-					InitializeFogStateFromVanilla();
-					if (map?.mapDrawer != null)
-					{
-						foreach (var cell in map.AllCells)
-							map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-					}
-				}
+				// Vanilla's FloodUnfog already dirties the meshes it changed.
+				InitializeFogStateFromVanilla();
 			});
 		}
 
@@ -409,47 +402,13 @@ namespace CombatAI
 			return (uint)x < (uint)mapSizeX && (uint)z < (uint)mapSizeZ ? z * mapSizeX + x : -1;
 		}
 
-		private void QueueFogChange(int index)
-		{
-			// Called under fogLock, including when a temporary reveal revisits a cell.
-			pendingChanges.Add(index);
-		}
-
-		private void FlushFogChanges()
-		{
-			lock (fogLock)
-			{
-				if (Finder.Settings.FogOfWar_DisableOnPlayerMap && map.IsPlayerHome)
-				{
-					pendingChanges.Clear();
-					return;
-				}
-				foreach (int index in pendingChanges)
-				{
-					int x = index % mapSizeX, z = index / mapSizeX;
-					// Vanilla's two-argument API invalidates sections touched by all eight
-					// adjacent cells as well as the changed cell, even across corners.
-					for (int dz = -1; dz <= 1; dz++)
-					for (int dx = -1; dx <= 1; dx++)
-					{
-						int nx = x + dx, nz = z + dz;
-						if ((uint)nx < (uint)mapSizeX && (uint)nz < (uint)mapSizeZ)
-							dirtyNativeSections.Add(new IntVec2(nx / Section.Size, nz / Section.Size));
-					}
-				}
-				foreach (IntVec2 section in dirtyNativeSections)
-					map.mapDrawer.MapMeshDirty(new IntVec3(section.x * Section.Size, 0, section.z * Section.Size),
-						MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things, false, false);
-				dirtyNativeSections.Clear();
-				pendingChanges.Clear();
-			}
-		}
 		private void OnRegionsRoomsChanged()
 		{
 			lock (fogLock)
 			{
 				if (!map.IsPlayerHome) return;
 				Interlocked.Increment(ref indoorRevision);
+				Interlocked.Increment(ref stateRevision);
 				try
 				{
 					int mapSizeX  = map.Size.x;
@@ -458,12 +417,11 @@ namespace CombatAI
 					int[] dx = { -1, 0, 1, -1, 1, -1, 0, 1 };
 					int[] dz = { -1, -1, -1, 0, 0, 1, 1, 1 };
 
-					void ClearCAICell(int idx, IntVec3 cell)
+					void ClearCAICell(int idx)
 					{
 						if ((uint)idx >= (uint)fogState.Length) return;
 						if (fogState[idx] != CellFogState.CAIFogged) return;
 						fogState[idx] = CellFogState.VanillaExplored;
-						map.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
 					}
 
 					foreach (Room room in map.regionAndRoomUpdater.roomLookup.Values)
@@ -484,7 +442,7 @@ namespace CombatAI
 						foreach (IntVec3 cell in room.Cells)
 						{
 							int idx = cellIndices.CellToIndex(cell);
-							ClearCAICell(idx, cell);
+							ClearCAICell(idx);
 							int cx = cell.x; int cz = cell.z;
 							for (int d = 0; d < 8; d++)
 							{
@@ -493,7 +451,7 @@ namespace CombatAI
 								int ni = nz * mapSizeX + nx;
 								Region nReg = rg.GetValidRegionAt_NoRebuild(new IntVec3(nx, 0, nz));
 								if (nReg != null && nReg.type != RegionType.Portal && (nReg.Room == null || !nReg.Room.ProperRoom)) continue;
-								ClearCAICell(ni, new IntVec3(nx, 0, nz));
+								ClearCAICell(ni);
 							}
 						}
 					}
@@ -590,6 +548,7 @@ namespace CombatAI
 			_indoorCacheBuffer      = expanded;
 			_indoorProtectExpBuffer = protect;
 			_indoorProtectBuffer    = protectExp;
+			Interlocked.Increment(ref stateRevision);
 		}
 
 		private void InitializeFogStateFromVanilla()
@@ -598,6 +557,7 @@ namespace CombatAI
 			{
 				if (map?.fogGrid == null) return;
 				Interlocked.Increment(ref indoorRevision);
+				Interlocked.Increment(ref stateRevision);
 				try
 				{
 					for (int i = 0; i < fogState.Length; i++)
@@ -699,6 +659,7 @@ namespace CombatAI
 					previousIndoorVisible = Finder.Settings.FogOfWar_IndoorVisible;
 					previousIndoorHome = _cachedIsPlayerHome;
 					Interlocked.Increment(ref indoorRevision);
+					Interlocked.Increment(ref stateRevision);
 				}
 				if (map.IsPlayerHome && rebuiltIndoorRevision != Volatile.Read(ref indoorRevision))
 				{
@@ -706,7 +667,6 @@ namespace CombatAI
 					RebuildIndoorRoomCache();
 				}
 				asyncActions.ExecuteMainThreadActions();
-				FlushFogChanges();
 				DrawFog(Mathf.FloorToInt(mapScreenRect.xMin / SECTION_SIZE), Mathf.FloorToInt(mapScreenRect.yMin / SECTION_SIZE), Mathf.FloorToInt(mapScreenRect.xMax / SECTION_SIZE), Mathf.FloorToInt(mapScreenRect.yMax / SECTION_SIZE));
 			}
 		}
@@ -769,7 +729,10 @@ namespace CombatAI
 					{
 						section.ApplyFogged();
 					}
-					section.Draw();
+					if (!section.clear)
+					{
+						section.Draw();
+					}
 				}
 			}
 		}
@@ -778,6 +741,7 @@ namespace CombatAI
 		{
 			Stopwatch       stopwatch = new Stopwatch();
 			List<ITempSpot> spots     = new List<ITempSpot>();
+			List<KeyValuePair<ISection, ITempCell>> spotCells = new List<KeyValuePair<ISection, ITempCell>>();
 			while (alive && asyncActions.Alive)
 			{
 				stopwatch.Restart();
@@ -812,12 +776,18 @@ namespace CombatAI
 										tCell.val       = Mathf.Clamp01(1f - cell.DistanceTo_Fast(spot.center) / spot.radius);
 										tCell.timestamp = GenTicks.TicksGame;
 										tCell.duration  = (short)spot.duration;
-										lock (fogLock) section.extraCells.Add(tCell);
+										spotCells.Add(new KeyValuePair<ISection, ITempCell>(section, tCell));
 									}
 								}
 							};
 							setAction(spot.center, 0, 0, 0);
 							ShadowCastingUtility.CastWeighted(map, spot.center, setAction, Mathf.CeilToInt(spot.radius), 16, spotBuffer);
+							lock (fogLock)
+							{
+								for (int i = 0; i < spotCells.Count; i++)
+									spotCells[i].Key.extraCells.Add(spotCells[i].Value);
+							}
+							spotCells.Clear();
 						}
 					}
 					// Prioritize updating visible sections, then a limited number of background sections per loop
@@ -829,7 +799,7 @@ namespace CombatAI
 					{
 						for (int v = visMinV; v <= visMaxV; v++)
 						{
-							grid2d[u][v].Update();
+							if (!IsSettled(u, v)) grid2d[u][v].Update();
 						}
 					}
 					// Keep the per-pass budget fixed: pacing already scales with tick rate.
@@ -841,7 +811,8 @@ namespace CombatAI
 					{
 						// wrap indices
 						if (backgroundNextU >= totalU) { backgroundNextU = 0; backgroundNextV = 0; }
-						if (backgroundNextU < visMinU || backgroundNextU > visMaxU || backgroundNextV < visMinV || backgroundNextV > visMaxV)
+						if ((backgroundNextU < visMinU || backgroundNextU > visMaxU || backgroundNextV < visMinV || backgroundNextV > visMaxV)
+							&& !IsSettled(backgroundNextU, backgroundNextV))
 						{
 							grid2d[backgroundNextU][backgroundNextV].Update();
 							bgBudget--;
@@ -867,6 +838,24 @@ namespace CombatAI
 			}
 		}
 
+		// A section needs no update when its last pass changed nothing, no outside state
+		// changed since, no temporary reveals are pending, and no sight has touched it or
+		// its neighbors (the blur reads one cell beyond the edge) for two cycles. Then
+		// every visibility read is 0 and another pass would produce the same result.
+		private bool IsSettled(int u, int v)
+		{
+			ISection section = grid2d[u][v];
+			if (section.settledRevision != Volatile.Read(ref stateRevision) || section.extraCells.Count > 0) return false;
+			ITFloatGrid fogGrid = sight?.gridFog;
+			if (fogGrid == null) return true;
+			for (int du = -1; du <= 1; du++)
+			for (int dv = -1; dv <= 1; dv++)
+			{
+				if (!fogGrid.IsBlockCold(u + du, v + dv)) return false;
+			}
+			return true;
+		}
+
 		private class ISection
 		{
 			public readonly  float[]              cells;
@@ -874,8 +863,12 @@ namespace CombatAI
 			public readonly  List<ITempCell>      extraCells;
 			private readonly Material             mat;
 			private readonly Mesh                 mesh;
+			private readonly float[]              neighborVisibility = new float[PADDED_SECTION_SIZE * PADDED_SECTION_SIZE];
 			private readonly Vector3              pos;
 			public volatile  bool                 dirty = true;
+			public           bool                 clear;
+			public volatile  int                  settledRevision = -1;
+			private          bool                 stateChanged;
 			public           Rect                 rect;
 			public           float                s_color;
 
@@ -905,13 +898,29 @@ namespace CombatAI
 				{
 					if (!dirty) return;
 					mat.SetFloatArray("_Fog", cells);
+					clear = true;
+					for (int i = 0; i < cells.Length; i++)
+					{
+						if (cells[i] != 0f)
+						{
+							clear = false;
+							break;
+						}
+					}
 					dirty = false;
 				}
 			}
 
 			public void Update()
 			{
-				lock (comp.fogLock) dirty |= UpdateLocked();
+				lock (comp.fogLock)
+				{
+					// Read first: a revision bumped mid-pass must leave the section unsettled.
+					int revision = Volatile.Read(ref comp.stateRevision);
+					bool changed = UpdateLocked();
+					dirty |= changed;
+					settledRevision = changed || stateChanged ? -1 : revision;
+				}
 			}
 
 			private bool UpdateLocked()
@@ -931,6 +940,7 @@ namespace CombatAI
 				ColorInt[] glowGrid = CombatAI.Compatibility.GlowGridCompat.GetGlowGrid(comp.glow);
 				float      glowSky  = comp.SkyGlow;
 				bool       changed  = false;
+				stateChanged = false;
 
 				void SetCell(int x, int z, float glowOffset, float visibilityOffset, bool allowLowerValues)
 				{
@@ -947,7 +957,7 @@ namespace CombatAI
 						if (comp.fogState[index] == CellFogState.CAIFogged)
 						{
 							comp.fogState[index] = CellFogState.VanillaExplored;
-							comp.QueueFogChange(index);
+							stateChanged = true;
 						}
 						return;
 					}
@@ -962,12 +972,8 @@ namespace CombatAI
 						if (!isWall && walls != null)
 						for (int i = 0; i < 9; i++)
 						{
-							int nx = loc.x + i % 3 - 1, nz = loc.z + i / 3 - 1;
-							int adjIndex = comp.CellIndexOrInvalid(nx, nz);
-							if (adjIndex >= 0 && walls.CanBeSeenOver(adjIndex))
-							{
-								visibilityAdj += fogGrid.Get(adjIndex);
-							}
+							// Padded coordinates: (x + dx + 1, z + dz + 1) with dx = i % 3 - 1, dz = i / 3 - 1.
+							visibilityAdj += neighborVisibility[(z + i / 3) * PADDED_SECTION_SIZE + x + i % 3];
 						}
 						visibility = Maths.Max(visibilityAdj / 9, visibility) + visibilityOffset;
                         	if (glowSky < 1)
@@ -983,7 +989,6 @@ namespace CombatAI
                         	}
 						float val = Maths.Max(1 - visibility, 0);
 						CellFogState prevState = comp.fogState[index];
-						bool prevFog = prevState != CellFogState.VanillaExplored;
 						bool newFog = visibility <= visRLimit + 1e-3f;
 						if (allowLowerValues || old >= val)
 						{
@@ -1010,12 +1015,11 @@ namespace CombatAI
 									catch { }
 								}
 							}
-							if (prevState == CellFogState.VanillaUnexplored && comp.fogState[index] != prevState)
-								Interlocked.Increment(ref comp.indoorRevision);
-							bool newEffFog = comp.fogState[index] != CellFogState.VanillaExplored;
-							if (prevFog != newEffFog)
+							if (comp.fogState[index] != prevState)
 							{
-								comp.QueueFogChange(index);
+								stateChanged = true;
+								if (prevState == CellFogState.VanillaUnexplored)
+									Interlocked.Increment(ref comp.indoorRevision);
 							}
 						}
 						if (comp.fogState[index] != CellFogState.VanillaExplored)
@@ -1050,6 +1054,19 @@ namespace CombatAI
 
 				if (fogGrid != null)
 				{
+					// Read each neighbor once per pass instead of nine times; cells off the map
+					// or behind walls contribute nothing to the blur.
+					if (walls != null)
+					{
+						for (int z = -1; z <= SECTION_SIZE; z++)
+						{
+							for (int x = -1; x <= SECTION_SIZE; x++)
+							{
+								int adjIndex = comp.CellIndexOrInvalid(pos.x + x, pos.z + z);
+								neighborVisibility[(z + 1) * PADDED_SECTION_SIZE + x + 1] = adjIndex >= 0 && walls.CanBeSeenOver(adjIndex) ? fogGrid.Get(adjIndex) : 0f;
+							}
+						}
+					}
 					for (int x = 0; x < SECTION_SIZE; x++)
 					{
 						for (int z = 0; z < SECTION_SIZE; z++)

@@ -4,8 +4,14 @@ namespace CombatAI
 {
     public class ITFloatGrid
     {
+        public const int BLOCK_SIZE = 16;
+
         private readonly CellIndices cellIndices;
         private readonly ITCell[]    grid;
+        // Last cycle each BLOCK_SIZE square was written, so readers can tell when a
+        // whole block reads as 0 without scanning it.
+        private readonly ushort[]    blockCycle;
+        private readonly int         mapSizeX, blocksX, blocksZ;
 
         public readonly int    mapCellNum;
         private         ushort cycleNum = 19;
@@ -17,6 +23,14 @@ namespace CombatAI
             cellIndices = map.cellIndices;
             grid        = new ITCell[cellIndices.NumGridCells];
             mapCellNum  = cellIndices.NumGridCells;
+            mapSizeX    = map.Size.x;
+            blocksX     = (mapSizeX + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            blocksZ     = (map.Size.z + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            blockCycle  = new ushort[blocksX * blocksZ];
+            for (int i = 0; i < blockCycle.Length; i++)
+            {
+                blockCycle[i] = (ushort)(cycleNum - 2);
+            }
         }
 
         public int CycleNum
@@ -33,6 +47,8 @@ namespace CombatAI
         {
             if (index >= 0 && index < mapCellNum)
             {
+                int z = index / mapSizeX;
+                blockCycle[z / BLOCK_SIZE * blocksX + (index - z * mapSizeX) / BLOCK_SIZE] = cycleNum;
                 ITCell cell = grid[index];
                 if (cell.sig != sig)
                 {
@@ -82,6 +98,19 @@ namespace CombatAI
                 }
             }
             return 0;
+        }
+
+        /// <summary>
+        ///     Whether every cell in block (<paramref name="bx" />, <paramref name="bz" />) reads as 0: Get only returns
+        ///     values written this cycle or the previous one. Blocks outside the map are cold.
+        /// </summary>
+        public bool IsBlockCold(int bx, int bz)
+        {
+            if ((uint)bx >= (uint)blocksX || (uint)bz >= (uint)blocksZ)
+            {
+                return true;
+            }
+            return (ushort)(cycleNum - blockCycle[bz * blocksX + bx]) >= 2;
         }
 
         public void Next()

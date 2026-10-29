@@ -11,8 +11,8 @@ import sys
 import tempfile
 
 
-def worker_method(source):
-    start = source.index("private void OffThreadLoop()")
+def worker_method(source, signature="private void OffThreadLoop()"):
+    start = source.index(signature)
     opening = source.index("{", start)
     depth = 1
     end = opening + 1
@@ -56,8 +56,16 @@ static class ListExtensions {
         return value;
     }
 }
+class ITFloatGrid {
+    public readonly HashSet<long> Hot = new HashSet<long>();
+    public bool IsBlockCold(int bx, int bz) { return !Hot.Contains(((long)bx << 32) | (uint)bz); }
+}
+class Sight { public ITFloatGrid gridFog = new ITFloatGrid(); }
 class Worker {
     const int SECTION_SIZE = 16;
+    public int stateRevision;
+    public Sight sight = new Sight();
+    public bool Settle;
     readonly object _lockerSpots = new object();
     readonly object fogLock = new object();
     readonly List<ITempSpot> spotsQueued = new List<ITempSpot>();
@@ -96,10 +104,27 @@ class Worker {
         return thread;
     }
     public void KillAsync() { asyncActions.Alive = false; }
+    public ISection Section(int u, int v) { return grid2d[u][v]; }
+    public int Size { get { return grid2d.Length; } }
+    // Runs the given number of passes on a fresh thread and returns per-section update counts.
+    public int[,] RunPasses(int passes) {
+        foreach (var column in grid2d) foreach (var section in column) section.Count = 0;
+        alive = true; ready = true; Passes = 0; StopAfterPasses = passes;
+        Observed = this;
+        Thread thread = Start();
+        bool stopped = thread.Join(1500);
+        Observed = null;
+        if (!stopped) { alive = false; thread.Join(500); return null; }
+        var counts = new int[Size, Size];
+        for (int u = 0; u < Size; u++) for (int v = 0; v < Size; v++) counts[u, v] = grid2d[u][v].Count;
+        return counts;
+    }
     public class ISection {
         readonly Worker owner;
         readonly int delay;
         public readonly List<ITempCell> extraCells = new List<ITempCell>();
+        public volatile int settledRevision = -1;
+        public int Count;
         public ISection(Worker owner, int delay) { this.owner = owner; this.delay = delay; }
         public void Update() {
             if (delay > 0) Thread.Sleep(delay);
@@ -108,11 +133,14 @@ class Worker {
                 owner.SeenEver.Add(this);
             }
             Interlocked.Increment(ref owner.Updates);
+            Count++;
+            if (owner.Settle) settledRevision = owner.stateRevision;
         }
     }
     struct ITempSpot { public IntVec3 center; public float radius; public int duration; }
     public struct ITempCell { public byte u, v; public float val; public int timestamp; public short duration; }
     /* PRODUCTION_METHOD */
+    /* SETTLED_METHOD */
 }
 class PassStopwatch {
     readonly Stopwatch watch = new Stopwatch();
@@ -121,6 +149,7 @@ class PassStopwatch {
     public void Restart() { watch.Restart(); if (Worker.Observed != null) Worker.Observed.BeginPass(); }
 }
 class Program {
+    const bool HasSettledCheck = /* HAS_SETTLED */;
     static int? backgroundWork;
     static bool Coverage(float multiplier) {
         var worker = new Worker(multiplier, 0, 6);
@@ -156,6 +185,30 @@ class Program {
         if (!stopped) { thread.Abort(); thread.Join(500); }
         return progressed && stopped;
     }
+    static bool Expect(int[,] counts, Func<int, int, int> expected, string name) {
+        bool passed = counts != null;
+        string detail = counts == null ? "worker did not stop" : "";
+        for (int u = 0; passed && u < counts.GetLength(0); u++)
+            for (int v = 0; passed && v < counts.GetLength(1); v++)
+                if (counts[u, v] != expected(u, v)) { passed = false; detail = "section " + u + "," + v + " updated " + counts[u, v] + " times, expected " + expected(u, v); }
+        Console.WriteLine(name + ": " + (passed ? "PASS" : "FAIL") + (detail.Length > 0 ? " (" + detail + ")" : ""));
+        return passed;
+    }
+    static bool Settling() {
+        // Six passes cover all 36 sections with the 16-section background budget.
+        var worker = new Worker(1, 0, 6);
+        worker.Settle = true;
+        bool passed = Expect(worker.RunPasses(6), (u, v) => 1, "settled cold sections update once, then skip");
+        worker.stateRevision++;
+        passed &= Expect(worker.RunPasses(6), (u, v) => 1, "state revision wakes every section once");
+        worker.sight.gridFog.Hot.Add((2L << 32) | 2);
+        passed &= Expect(worker.RunPasses(4), (u, v) => Math.Abs(u - 2) <= 1 && Math.Abs(v - 2) <= 1 ? 4 : 0, "sight on a block keeps it and its neighbors updating");
+        worker.sight.gridFog.Hot.Clear();
+        worker.RunPasses(6);
+        worker.Section(5, 5).extraCells.Add(new Worker.ITempCell());
+        passed &= Expect(worker.RunPasses(4), (u, v) => u == 5 && v == 5 ? 4 : 0, "pending temporary reveals keep a section updating");
+        return passed;
+    }
     static int Main() {
         bool passed = Check("normal speed, fast sections", 1, 0, true);
         passed &= Check("triple speed, fast sections", 3, 0, true);
@@ -166,6 +219,7 @@ class Program {
         passed &= Coverage(0);
         passed &= Coverage(1);
         passed &= Coverage(3);
+        if (HasSettledCheck) passed &= Settling();
         return passed ? 0 : 1;
     }
 }
@@ -179,7 +233,12 @@ def main():
         directory = Path(temporary)
         program = directory / "FogWorkerRegression.cs"
         executable = directory / "FogWorkerRegression.exe"
-        program.write_text(HARNESS.replace("/* PRODUCTION_METHOD */", worker_method(source.read_text()).replace("Stopwatch", "PassStopwatch")))
+        text = source.read_text()
+        # Older sources predate settled-section skipping; run only the checks they support.
+        has_settled = "private bool IsSettled(" in text
+        harness = HARNESS.replace("/* PRODUCTION_METHOD */", worker_method(text).replace("Stopwatch", "PassStopwatch"))
+        harness = harness.replace("/* SETTLED_METHOD */", worker_method(text, "private bool IsSettled(") if has_settled else "")
+        program.write_text(harness.replace("/* HAS_SETTLED */", "true" if has_settled else "false"))
         subprocess.run(["mcs", "-warn:0", "-out:" + str(executable), str(program)], check=True)
         return subprocess.run(["mono", str(executable)], timeout=20).returncode
 

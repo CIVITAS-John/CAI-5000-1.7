@@ -47,18 +47,19 @@ namespace CombatAI.Patches
         [HarmonyPatch(typeof(DynamicDrawManager), "DrawDynamicThings")]
         private static class DynamicDrawManager_DrawDynamicThings_Patch
         {
+            // Resolved once; this prefix runs every frame.
+            private static readonly FieldInfo    mapField    = typeof(DynamicDrawManager).GetField("map", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            private static readonly PropertyInfo mapProperty = mapField == null ? typeof(DynamicDrawManager).GetProperty("map", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) : null;
+            private static readonly AccessTools.FieldRef<DynamicDrawManager, Map> mapRef = mapField != null && mapField.FieldType == typeof(Map) ? AccessTools.FieldRefAccess<DynamicDrawManager, Map>(mapField) : null;
+
             public static void Prefix(DynamicDrawManager __instance)
             {
                 try
                 {
-                    Map map = null;
-                    var f = __instance.GetType().GetField("map", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    if (f != null) map = f.GetValue(__instance) as Map;
-                    else
-                    {
-                        var p = __instance.GetType().GetProperty("map", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                        if (p != null) map = p.GetValue(__instance) as Map;
-                    }
+                    Map map;
+                    if (mapRef != null) map = mapRef(__instance);
+                    else if (mapField != null) map = mapField.GetValue(__instance) as Map;
+                    else map = mapProperty?.GetValue(__instance) as Map;
                     fogThings = map?.GetComp_Fast<MapComponent_FogGrid>();
                 }
                 catch { fogThings = null; }

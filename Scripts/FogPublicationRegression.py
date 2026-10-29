@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise production fog publication, native writes, and mesh batching with mcs/mono."""
+"""Exercise production fog publication, settling, and native writes with mcs/mono."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,34 +21,12 @@ using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
-struct IntVec2 {
-    public int x, z;
-    public IntVec2(int x, int z) { this.x=x; this.z=z; }
-}
-struct IntVec3 {
-    public int x, z;
-    public IntVec3(int x, int y, int z) { this.x=x; this.z=z; }
-}
-class Section { public const int Size = 17; }
-[Flags] enum Flags { FogOfWar=1, Things=2 }
-static class MapMeshFlagDefOf { public const Flags FogOfWar=Flags.FogOfWar, Things=Flags.Things; }
-class MapDrawer {
-    public readonly HashSet<IntVec2> Sections = new HashSet<IntVec2>();
-    public int Calls;
-    public void MapMeshDirty(IntVec3 cell, Flags flags, bool neighbors, bool sections) {
-        if (neighbors || sections || flags != (Flags.FogOfWar|Flags.Things)) throw new Exception("unexpected invalidation flags");
-        Calls++;
-        Sections.Add(new IntVec2(cell.x / Section.Size, cell.z / Section.Size));
-    }
-}
 struct NativeBuffer {
     public bool[] Data;
     public void Set(int index, bool value) { Data[index] = value; }
 }
 class FogGrid { private NativeBuffer fogGrid; public FogGrid(bool[] data) { Replace(data); } public void Replace(bool[] data) { fogGrid = new NativeBuffer { Data=data }; } }
-class Settings { public bool FogOfWar_DisableOnPlayerMap; }
-static class Finder { public static readonly Settings Settings = new Settings(); }
-class Map { public bool IsPlayerHome; public readonly MapDrawer mapDrawer = new MapDrawer(); public readonly FogGrid fogGrid; public Map(bool[] data) { fogGrid = new FogGrid(data); } }
+class Map { public readonly FogGrid fogGrid; public Map(bool[] data) { fogGrid = new FogGrid(data); } }
 class Material {
     public int Uploads;
     public float Value;
@@ -58,15 +36,12 @@ class Material {
 class Fog {
     readonly int mapSizeX=51, mapSizeZ=51;
     public readonly object fogLock = new object();
-    public readonly HashSet<int> pendingChanges = new HashSet<int>();
-    readonly HashSet<IntVec2> dirtyNativeSections = new HashSet<IntVec2>();
+    public int stateRevision;
     public readonly Map map;
         Action<int,bool> _nativeFogWriter;
     public Fog(bool[] data) { map = new Map(data); }
     /* INDEX */
-    /* FLUSH */
     /* WRITE */
-    public void Flush() { FlushFogChanges(); }
     public int Index(int x, int z) { return CellIndexOrInvalid(x,z); }
     public void Write(int index, bool value) { WriteNativeFogBit(index,value); }
     public class RenderSection {
@@ -74,10 +49,14 @@ class Fog {
         public readonly Material mat = new Material();
         public readonly float[] cells = new float[256];
         public volatile bool dirty=true;
+        public bool clear;
+        public volatile int settledRevision=-1;
+        bool stateChanged;
         public RenderSection(Fog comp) { this.comp=comp; }
-        public bool NextChanged;
+        public bool NextChanged, NextStateChanged;
+        public int NextIndex;
         public float NextValue;
-        bool UpdateLocked() { if (NextChanged) cells[0]=NextValue; return NextChanged; }
+        bool UpdateLocked() { stateChanged=NextStateChanged; if (NextChanged) cells[NextIndex]=NextValue; return NextChanged; }
         /* UPDATE */
         /* APPLY */
     }
@@ -87,20 +66,6 @@ class Program {
     static void Main() {
         var data = new bool[2601];
         var fog = new Fog(data);
-        fog.pendingChanges.Add(16+16*51);
-        fog.pendingChanges.Add(17+16*51);
-        fog.pendingChanges.Add(16+16*51);
-        fog.Flush();
-        Assert(fog.map.mapDrawer.Calls==4 && fog.map.mapDrawer.Sections.Count==4, "corner neighbors missing or invalidated repeatedly");
-        fog.Flush();
-        Assert(fog.map.mapDrawer.Calls==4, "empty flush invalidates meshes");
-        fog.pendingChanges.Add(0); fog.Flush();
-        Assert(fog.map.mapDrawer.Calls==5, "map edge invalidation incorrect");
-        Console.WriteLine("neighboring native mesh sections invalidated once: PASS");
-        Finder.Settings.FogOfWar_DisableOnPlayerMap=true; fog.map.IsPlayerHome=true;
-        fog.pendingChanges.Add(40); fog.Flush();
-        Assert(fog.map.mapDrawer.Calls==5 && fog.pendingChanges.Count==0, "disabled home fog invalidates meshes or retains pending changes");
-        Finder.Settings.FogOfWar_DisableOnPlayerMap=false;
         // A 51-cell map leaves three cells in its last CAI 16-cell section.
         Assert(fog.Index(50,50)==2600 && fog.Index(51,0)==-1 && fog.Index(0,51)==-1, "partial section padding aliases valid cells");
         Assert(fog.Index(-1,1)==-1 && fog.Index(51,1)==-1 && fog.Index(0,1)==51, "neighbor row wraps at map edge");
@@ -128,6 +93,25 @@ class Program {
         section.ApplyFogged();
         Assert(section.mat.Value==0.75f && !section.dirty && section.mat.Uploads==3, "latest worker publication not uploaded");
         Console.WriteLine("synchronized render publication and upload only on change: PASS");
+        var clearing = new Fog.RenderSection(fog);
+        clearing.ApplyFogged();
+        Assert(clearing.clear, "all-zero upload not marked clear");
+        clearing.NextChanged=true; clearing.NextIndex=255; clearing.NextValue=0.5f; clearing.Update(); clearing.ApplyFogged();
+        Assert(!clearing.clear, "upload with fog in the last cell marked clear");
+        clearing.NextValue=0f; clearing.Update(); clearing.ApplyFogged();
+        Assert(clearing.clear, "upload back to all zero not marked clear");
+        Console.WriteLine("clear flag follows the uploaded cells: PASS");
+        var settling = new Fog.RenderSection(fog);
+        fog.stateRevision=7;
+        settling.NextChanged=true; settling.Update();
+        Assert(settling.settledRevision==-1, "section settled on a pass that changed cells");
+        settling.NextChanged=false; settling.NextStateChanged=true; settling.Update();
+        Assert(settling.settledRevision==-1, "section settled on a pass that changed fog state");
+        settling.NextStateChanged=false; settling.Update();
+        Assert(settling.settledRevision==7, "unchanged pass did not settle at the current revision");
+        fog.stateRevision++;
+        Assert(settling.settledRevision!=fog.stateRevision, "revision bump left section settled");
+        Console.WriteLine("sections settle only after a pass with no changes: PASS");
     }
 }
 '''
@@ -137,7 +121,6 @@ def main():
     root = Path(__file__).resolve().parents[1]
     source = (root / 'Source/Rule56/MapComponent_FogGrid.cs').read_text()
     code = HARNESS.replace('/* INDEX */', method(source, 'private int CellIndexOrInvalid('))
-    code = code.replace('/* FLUSH */', method(source, 'private void FlushFogChanges()'))
     code = code.replace('/* WRITE */', method(source, 'private void WriteNativeFogBit('))
     code = code.replace('/* UPDATE */', method(source, 'public void Update()'))
     code = code.replace('/* APPLY */', method(source, 'public void ApplyFogged()'))

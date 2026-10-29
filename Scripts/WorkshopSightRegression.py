@@ -134,7 +134,7 @@ namespace CombatAI {
  class MapComponent_FogGrid {
   const int SIGHT_GLOW_BLOCK_SIZE=6,SIGHT_GLOW_BUCKET_COUNT=16,SIGHT_GLOW_REFRESH_INTERVAL=15;
   const int SHOT_REVEAL_COOLDOWN_TICKS=20,SHOT_REVEAL_DURATION_TICKS=90;
-  readonly int mapSizeX=12,mapSizeZ=12,sightGlowBlocksX=2,sightGlowBlocksZ=2;
+  readonly int mapSizeX=12,mapSizeZ=12,sightGlowBlocksX=2,sightGlowBlocksZ=2;readonly bool supportsMap=true;
   byte[] sightGlowBuckets;int sightGlowLastRefreshTick=-9999,ticksGame;
   int[] shotRevealLastTick=new int[144]; readonly object _lockerSpots=new object();
   readonly List<ITempSpot> spotsQueued=new List<ITempSpot>();

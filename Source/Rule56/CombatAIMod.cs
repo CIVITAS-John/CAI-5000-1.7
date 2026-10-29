@@ -132,21 +132,12 @@ namespace CombatAI
 
             // If the user just enabled "Close fow in colony map" and the current
             // active map belongs to the player faction, clear CAI war fog on
-            // that map and force a full fog redraw so vanilla
-            // unexplored areas appear correctly immediately.
+            // that map. Vanilla fog meshes never contain CAI fog, so they need no rebuild.
             try
             {
                 if (Finder.Settings.FogOfWar_DisableOnPlayerMap && Find.CurrentMap != null && Find.CurrentMap.IsPlayerHome)
                 {
-                    var curComp = Find.CurrentMap.GetComp_Fast<MapComponent_FogGrid>();
-                    if (curComp != null)
-                    {
-                        curComp.ClearWarFog();
-                        foreach (var cell in Find.CurrentMap.AllCells)
-                        {
-                            Find.CurrentMap.mapDrawer.MapMeshDirty(cell, MapMeshFlagDefOf.FogOfWar | MapMeshFlagDefOf.Things);
-                        }
-                    }
+                    Find.CurrentMap.GetComp_Fast<MapComponent_FogGrid>()?.ClearWarFog();
                 }
             }
             catch (Exception e)
