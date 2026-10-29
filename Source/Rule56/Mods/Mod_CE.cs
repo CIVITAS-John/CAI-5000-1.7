@@ -117,6 +117,13 @@ namespace CombatAI
                     postfix: new HarmonyMethod(AccessTools.Method(typeof(Verb_ShootCE_Targeting_Patch), nameof(Verb_ShootCE_Targeting_Patch.Postfix))));
                 Log.Message("ISMA: Patched Verb_ShootCE:TryStartCastOn for targeting notifications.");
             }
+            // CE overrides bypass the Verse.Verb shared sight postfix, so target finders would keep picking unseen targets.
+            MethodInfo mCECanHitTargetFrom = AccessTools.Method(Verb_ShootCE, nameof(Verb.CanHitTargetFrom), new[] { typeof(IntVec3), typeof(LocalTargetInfo) });
+            if (mCECanHitTargetFrom != null && mCECanHitTargetFrom.DeclaringType != typeof(Verb))
+            {
+                Finder.Harmony.Patch(mCECanHitTargetFrom, postfix: new HarmonyMethod(AccessTools.Method(typeof(Verb_Patch.Verb_CanHitTargetFrom_Patch), nameof(Verb_Patch.Verb_CanHitTargetFrom_Patch.Postfix))));
+                Log.Message($"ISMA: Patched {mCECanHitTargetFrom.DeclaringType?.FullName}:CanHitTargetFrom for shared sight.");
+            }
         }
 
         [RunIf(loaded: false)]

@@ -20,7 +20,14 @@ namespace CombatAI.Patches
 						MapComponent_FogGrid grid = map.GetComp_Fast<MapComponent_FogGrid>();
 						if (grid != null)
 						{
-							grid.RevealShotSpot(cell, scale);
+							if (SightUtility.NewSightSystemActive)
+							{
+								grid.RevealShotSpot(cell, scale);
+							}
+							else
+							{
+								grid.RevealSpot(cell, Maths.Max(scale, 3f), Rand.Range(120, 240));
+							}
 						}
 					}
 				}

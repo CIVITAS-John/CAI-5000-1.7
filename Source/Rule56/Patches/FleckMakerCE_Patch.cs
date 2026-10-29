@@ -30,7 +30,14 @@ namespace CombatAI.Patches
 					if (grid != null)
 					{
 						Current = cell;
-						grid.RevealShotSpot(cell, scale);
+						if (SightUtility.NewSightSystemActive)
+						{
+							grid.RevealShotSpot(cell, scale);
+						}
+						else
+						{
+							grid.RevealSpot(cell, Maths.Max(scale, 3f), Rand.Range(120, 240));
+						}
 					}
 				}
 			}

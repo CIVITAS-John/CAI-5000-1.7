@@ -157,17 +157,7 @@ namespace CombatAI.Gui
 
         private void FillCollapsible_FogOfWar(Listing_Collapsible collapsible)
         {
-            bool fogWasEnabled = Finder.Settings.FogOfWar_Enabled;
-            collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_Enable, ref Finder.Settings.FogOfWar_Enabled);
-            if (!fogWasEnabled && Finder.Settings.FogOfWar_Enabled)
-            {
-                Finder.Settings.NewSightSystem_Enabled = true;
-            }
-            bool fogEnabled = Finder.Settings.FogOfWar_Enabled;
-            if (!fogEnabled)
-            {
-                Finder.Settings.NewSightSystem_Enabled = false;
-            }
+            NewSightSettings.DrawFogToggle(collapsible);
 
             if (Finder.Settings.FogOfWar_Enabled)
             {
@@ -183,24 +173,7 @@ namespace CombatAI.Gui
             collapsible.Line(1);
             collapsible.Label(Keyed.CombatAI_Quick_NewSight_Title);
             collapsible.Label($"<color=#aaaaaa>{Keyed.CombatAI_Quick_NewSight_Description}</color>");
-            collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_Enable, ref Finder.Settings.NewSightSystem_Enabled, Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_Enable_Description, disabled: !fogEnabled);
-            if (!fogEnabled)
-            {
-                collapsible.Label($"<color=#aaaaaa>{Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_RequireFog}</color>");
-            }
-            collapsible.Label(Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius);
-            if (fogEnabled && Finder.Settings.NewSightSystem_Enabled)
-            {
-                collapsible.Lambda(25, rect =>
-                {
-                    Finder.Settings.NewSightSystem_BaseRadius = HorizontalSlider_NewTemp(rect, Finder.Settings.NewSightSystem_BaseRadius, 10f, 60f, false, Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout.Formatted(Mathf.RoundToInt(Finder.Settings.NewSightSystem_BaseRadius)), 0.05f);
-                });
-            }
-            else
-            {
-                collapsible.Label($"<color=#aaaaaa>{Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_BaseRadius_Readout.Formatted(Mathf.RoundToInt(Finder.Settings.NewSightSystem_BaseRadius))}</color>");
-            }
-            collapsible.CheckboxLabeled(Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing, ref Finder.Settings.NewSightSystem_ShowSightRing, Keyed.CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description, disabled: !fogEnabled);
+            NewSightSettings.DrawOptions(collapsible);
         }
 
         private float HorizontalSlider_NewTemp(Rect rect, float val, float min, float max, bool middleAlinment, string label, float roundTo = -1)

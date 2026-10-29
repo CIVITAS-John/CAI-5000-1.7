@@ -105,12 +105,12 @@
     <CombatAI.Settings.FactionTech.Sapping>Sapping {0}x. Higher values means less aggressive sapping</CombatAI.Settings.FactionTech.Sapping>
     <CombatAI.Settings.FactionTech.Group>Charge {0}x. Higher values means groups are more likely to charge</CombatAI.Settings.FactionTech.Group>
     <CombatAI.Quick.NewSight.Title>New sight system guide</CombatAI.Quick.NewSight.Title>
-    <CombatAI.Quick.NewSight.Description>Hover a weapon gizmo to preview the green sight ring. In the new system, fog reveal radius is kept identical to actual sight radius.</CombatAI.Quick.NewSight.Description>
+    <CombatAI.Quick.NewSight.Description>Hover a weapon gizmo to preview the green sight ring. In the new system, fog reveal radius matches actual sight radius, and both shrink in darkness.</CombatAI.Quick.NewSight.Description>
     <CombatAI.Settings.Basic.FogOfWar.NewSight.Enable>Enable unified sight system</CombatAI.Settings.Basic.FogOfWar.NewSight.Enable>
     <CombatAI.Settings.Basic.FogOfWar.NewSight.Enable.Description>Use a shared team-vision model for targeting. Units cannot attack targets outside team sight even if weapon range is sufficient.</CombatAI.Settings.Basic.FogOfWar.NewSight.Enable.Description>
     <CombatAI.Settings.Basic.FogOfWar.NewSight.RequireFog>Enable fog of war first to use the new sight system.</CombatAI.Settings.Basic.FogOfWar.NewSight.RequireFog>
     <CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius>Unified base sight radius</CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius>
     <CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius.Readout>{0} cells</CombatAI.Settings.Basic.FogOfWar.NewSight.BaseRadius.Readout>
     <CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing>Show sight ring with attack range</CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing>
-    <CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description>When selecting a pawn or turret, draw the sight range ring together with the attack range ring.</CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description>
+    <CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description>While hovering the weapon gizmo of a pawn or turret, draw the sight range ring together with the attack range ring. The sight ring reflects the light where the pawn or turret stands.</CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description>
 </LanguageData>

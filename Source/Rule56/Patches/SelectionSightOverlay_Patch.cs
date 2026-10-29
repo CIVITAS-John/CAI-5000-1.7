@@ -56,7 +56,7 @@ namespace CombatAI.Patches
 
         private static void DrawSightRing(Thing thing)
         {
-            if (!Finder.Settings.FogOfWar_Enabled || !Finder.Settings.NewSightSystem_Enabled || !Finder.Settings.NewSightSystem_ShowSightRing)
+            if (!SightUtility.NewSightSystemActive || !Finder.Settings.NewSightSystem_ShowSightRing)
             {
                 return;
             }
@@ -64,7 +64,8 @@ namespace CombatAI.Patches
             {
                 return;
             }
-            float radius = SightUtility.GetSightRadius(thing).sight;
+            // Sized for the light where the caster stands; darker or brighter targets shrink or extend it.
+            float radius = SightUtility.GetLitSightRadius(thing, thing.Position, thing.Position);
             if (radius > 0.1f)
             {
                 GenDraw.DrawRadiusRing(thing.Position, radius, SightRingColor);

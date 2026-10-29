@@ -11,6 +11,8 @@ namespace CombatAI
 
         private const int version                             = 15;
         internal const int QuickSetupRequiredRevision = 1;
+        internal const float NewSightSystem_MinBaseRadius = 10f;
+        internal const float NewSightSystem_MaxBaseRadius = 60f;
         public        int Advanced_SightThreadIdleSleepTimeMS = 1;
 
         /*
@@ -70,7 +72,6 @@ namespace CombatAI
 
         public bool  NewSightSystem_Enabled;
         public float NewSightSystem_BaseRadius = 30f;
-        public float NewSightSystem_TurretFactor = 0.5f;
         public bool  NewSightSystem_ShowSightRing = true;
 
         /*                 
@@ -248,10 +249,8 @@ namespace CombatAI
 
             Scribe_Values.Look(ref NewSightSystem_Enabled, $"NewSightSystem_Enabled.{version}");
             Scribe_Values.Look(ref NewSightSystem_BaseRadius, $"NewSightSystem_BaseRadius.{version}", 30f);
-            Scribe_Values.Look(ref NewSightSystem_TurretFactor, $"NewSightSystem_TurretFactor.{version}", 0.5f);
             Scribe_Values.Look(ref NewSightSystem_ShowSightRing, $"NewSightSystem_ShowSightRing.{version}", true);
-            NewSightSystem_BaseRadius = Math.Max(10f, Math.Min(60f, NewSightSystem_BaseRadius));
-            NewSightSystem_TurretFactor = Math.Max(0.1f, Math.Min(1f, NewSightSystem_TurretFactor));
+            NewSightSystem_BaseRadius = Math.Max(NewSightSystem_MinBaseRadius, Math.Min(NewSightSystem_MaxBaseRadius, NewSightSystem_BaseRadius));
             if (!FogOfWar_Enabled)
             {
                 NewSightSystem_Enabled = false;

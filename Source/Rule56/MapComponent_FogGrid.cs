@@ -24,7 +24,7 @@ namespace CombatAI
 	{
 		private const int SECTION_SIZE = 16;
 		private const int SIGHT_GLOW_BLOCK_SIZE = 6;
-		private const int SIGHT_GLOW_BUCKET_COUNT = 16;
+		internal const int SIGHT_GLOW_BUCKET_COUNT = 16;
 		private const int SIGHT_GLOW_REFRESH_INTERVAL = 15;
 		private const int SHOT_REVEAL_COOLDOWN_TICKS = 20;
 		private const int SHOT_REVEAL_DURATION_TICKS = 90;

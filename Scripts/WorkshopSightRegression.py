@@ -44,9 +44,10 @@ namespace Verse {
   public int x,z; public IntVec3(int x,int y,int z) { this.x=x;this.z=z; }
   public bool IsValid { get { return x>=0 && z>=0; } }
   public bool InBounds(Map m) { return x>=0 && z>=0 && x<m.Size.x && z<m.Size.z; }
+  public int DistanceToSquared(IntVec3 o) { return (x-o.x)*(x-o.x)+(z-o.z)*(z-o.z); }
  }
  public class Thing {
-  public Faction Faction=Faction.OfPlayer; public int thingIDNumber; public Map MapHeld;
+  public Faction Faction=Faction.OfPlayer; public int thingIDNumber; public Map Map,MapHeld;
   public Dictionary<Type,object> Comps=new Dictionary<Type,object>();
   public Dictionary<StatDef,float> Stats=new Dictionary<StatDef,float>();
   public T GetComp_Fast<T>() where T:class { object c; return Comps.TryGetValue(typeof(T),out c)?(T)c:null; }
@@ -67,11 +68,12 @@ namespace Verse {
  public class Health { public Capacities capacities=new Capacities(); }
  public class Capacities { public float Sight=1;public float GetLevel(object c) { return c==PawnCapacityDefOf.Sight?Sight:1; } }
  public class Needs { public Rest rest=new Rest(); }
- public class Rest { public float CurLevel=1; }
+ public class Rest { public float CurLevel=1; public int LastRestTick=-99999; }
  public class Map {
   public IntVec3 Size=new IntVec3(12,0,12); public bool IsPlayerHome;
   public MapGeneratorDef generatorDef=new MapGeneratorDef(); public GlowGrid glowGrid=new GlowGrid();
-  public FogGrid fogGrid=new FogGrid();
+  public FogGrid fogGrid=new FogGrid(); internal MapComponent_FogGrid Fog;
+  public T GetComp_Fast<T>() where T:class { return Fog as T; }
  }
  public class MapGeneratorDef { public bool defeatRequiresCantReachUnfogged; }
  public class GlowGrid { public float Value; public int Calls;public float GroundGlowAt(IntVec3 c) { Calls++; return Value; } }
@@ -95,6 +97,7 @@ namespace RimWorld {
 }
 namespace CombatAI.Compatibility {
  public static class NeedCompatExtras { public static float GetCurLevel(Rest rest) { return rest.CurLevel; } }
+ public static class NeedCompat { public static int GetLastRestTick(Rest rest) { return rest==null?-99999:rest.LastRestTick; } }
 }
 namespace CombatAI.Comps { public class ThingComp_Sighter { public int SightRadius=15; } }
 namespace CombatAI {
@@ -110,7 +113,7 @@ namespace CombatAI {
  class Settings {
   public bool FogOfWar_Enabled=true,NewSightSystem_Enabled,FogOfWar_Allies=true,FogOfWar_Animals=true,FogOfWar_AnimalsSmartOnly;
   public bool FogOfWar_Turrets=true,FogOfWar_DisableOnPlayerMap,FogOfWar_IndoorVisible;
-  public float FogOfWar_RangeMultiplier=2,NewSightSystem_BaseRadius=30,NewSightSystem_TurretFactor=.5f;
+  public float FogOfWar_RangeMultiplier=2,NewSightSystem_BaseRadius=30;
  }
  static class TKVCache<T,K,V> {
   static readonly Dictionary<T,V> values=new Dictionary<T,V>();static readonly Dictionary<T,int> ticks=new Dictionary<T,int>();
@@ -143,6 +146,7 @@ namespace CombatAI {
   FOG_METHODS
   public void Refresh() { ticksGame=GenTicks.TicksGame;RefreshSightGlowCacheIfNeeded(); }
   public byte[] Snapshot { get { return sightGlowBuckets; } }
+  internal byte[] SightGlowBuckets { get { return sightGlowBuckets; } }
   public int Reveals { get { return spotsQueued.Count; } }
   public float LastRadius { get { return spotsQueued[spotsQueued.Count-1].radius; } }
   public int LastDuration { get { return spotsQueued[spotsQueued.Count-1].duration; } }
@@ -152,6 +156,10 @@ class Program {
  static void Check(bool ok,string message) {if(!ok)throw new Exception(message);}
  static void Near(float actual,float expected,string message) {Check(Math.Abs(actual-expected)<.001f,message+": "+actual+" != "+expected);}
  static void Main() {
+  // Stat defs load before any map exists in game; night vision lookups resolve them once.
+  var night=new StatDef();var apparel=new StatDef();
+  DefDatabase<StatDef>.Values["NightVisionEfficiency"]=night;
+  DefDatabase<StatDef>.Values["NightVisionEfficiency_Apparel"]=apparel;
   var settings=Finder.Settings;var pawn=new Pawn();
   var legacy=SightUtility.GetSightRadius(pawn);
   Check(legacy.sight==20 && legacy.scan==36 && legacy.fog==24,"legacy weapon range and separate fog multiplier");
@@ -178,9 +186,6 @@ class Program {
   Near(SightUtility.GetSightRadius(pawn).sight,8,"encounter map minimum prevents defeat lockout");
   pawn.MapHeld.IsPlayerHome=true;
   Check(SightUtility.GetSightRadius(pawn).sight<8,"encounter minimum does not apply at home");
-  var night=new StatDef();var apparel=new StatDef();
-  DefDatabase<StatDef>.Values["NightVisionEfficiency"]=night;
-  DefDatabase<StatDef>.Values["NightVisionEfficiency_Apparel"]=apparel;
   pawn.Stats[night]=.4f;pawn.Stats[apparel]=.8f;
   Near(SightUtility.GetNightVisionLutReduction(pawn),.8f,"strongest available night vision stat");
   turret.Comps[typeof(CompMannable)]=new CompMannable{ManningPawn=pawn};
@@ -208,7 +213,23 @@ class Program {
   fog.RevealSpot(cell,2,120);Near(fog.LastRadius,16,"general reveals retain multiplier");
   Check(!fog.IsFogged(-1) && !fog.IsFogged(144),"invalid fog indices ignored");
   settings.FogOfWar_DisableOnPlayerMap=true;Check(!fog.IsFogged(new IntVec3(12,0,0)),"invalid fog coordinates ignored");
-  Console.WriteLine("PASS: legacy/unified ranges, mode cache invalidation, downed/encounter sight, night vision, lighting snapshots, shot cooldown and fog guards");
+  settings.FogOfWar_RangeMultiplier=2;settings.NewSightSystem_Enabled=false;
+  var legacyPawn=new Pawn();legacyPawn.Downed=true;var legacyDowned=SightUtility.GetSightRadius(legacyPawn);
+  Check(legacyDowned.sight==12 && legacyDowned.scan==20 && legacyDowned.fog==6,"legacy downed pawn keeps weapon sight and only fog shrinks");
+  legacyPawn.Downed=false;legacyPawn.needs.rest.LastRestTick=GenTicks.TicksGame-10;
+  Check(SightUtility.GetSightRadius(legacyPawn).fog==6,"legacy fog shrinks for a pawn that just slept");
+  settings.NewSightSystem_Enabled=true;
+  var unifiedRested=SightUtility.GetSightRadius(legacyPawn);
+  Check(unifiedRested.sight==30 && unifiedRested.fog==30 && unifiedRested.nightVisionReduction==0,"unified sight ignores recent sleep");
+  Near(SightUtility.GetSightRadius(pawn).nightVisionReduction,.8f,"night vision cached with unified sight radius");
+  var litFog=new MapComponent_FogGrid();litFog.map.glowGrid.Value=0;GenTicks.TicksGame+=15;litFog.Refresh();
+  var seer=new Pawn{Map=new Map{Fog=litFog}};var origin=new IntVec3(0,0,0);
+  Near(SightUtility.GetLitSightRadius(seer,origin,origin),15,"darkness halves the lit sight radius");
+  Check(SightUtility.CanSeeCell(seer,origin,new IntVec3(14,0,0)) && !SightUtility.CanSeeCell(seer,origin,new IntVec3(15,0,0)),"own sight uses the strict lit radius");
+  var nightSeer=new Pawn{Map=seer.Map};nightSeer.Stats[night]=1;
+  Check(SightUtility.CanSeeCell(nightSeer,origin,new IntVec3(29,0,0)),"night vision restores own sight in darkness");
+  Near(SightUtility.GetLitSightRadius(new Pawn(),origin,origin),30,"no fog component leaves sight unscaled");
+  Console.WriteLine("PASS: legacy/unified ranges, mode cache invalidation, downed/encounter sight, legacy downed/sleep fog, night vision caching, lit own sight, lighting snapshots, shot cooldown and fog guards");
  }
 }
 '''
@@ -229,7 +250,7 @@ def main():
     ]
     harness = HARNESS.replace("SIGHT_RADIUS", block(grid, "public struct ISightRadius"))
     harness = harness.replace("LUT_METHOD", block(grid, "private static float[] BuildSightGlowCoeffLut"))
-    harness = harness.replace("COEFFICIENT_METHOD", block(grid, "private static float GetSightGlowCoefficient"))
+    harness = harness.replace("COEFFICIENT_METHOD", block(grid, "internal static float GetSightGlowCoefficient"))
     harness = harness.replace("FOG_METHODS", "\n".join(block(fog, marker) for marker in methods))
     with tempfile.TemporaryDirectory(prefix="cai-workshop-sight-") as tmp:
         directory = Path(tmp)

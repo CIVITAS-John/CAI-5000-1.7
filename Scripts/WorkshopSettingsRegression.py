@@ -133,7 +133,7 @@ class Program {
         Check(!settings.Debug_DrawShadowCasts && !settings.Debug_DrawShadowCastsVectors && !settings.Debug_DrawThreatCasts && !settings.Debug_DisablePawnGuiOverlay, "overlay options reset");
         Check(!settings.Debug_DebugPathfinding && !settings.Debug_DebugAvailability && !settings.Debug_ValidateSight, "validation options reset");
     }
-    static Settings Load(float radius, float turret, bool fog, int revision) {
+    static Settings Load(float radius, bool fog, int revision) {
         var settings = new Settings();
         EnableDiagnostics(settings);
         Scribe.mode = LoadSaveMode.LoadingVars;
@@ -144,7 +144,7 @@ class Program {
         Scribe.Values["FogOfWar_Enabled.15"] = fog;
         Scribe.Values["NewSightSystem_Enabled.15"] = true;
         Scribe.Values["NewSightSystem_BaseRadius.15"] = radius;
-        Scribe.Values["NewSightSystem_TurretFactor.15"] = turret;
+        Scribe.Values["NewSightSystem_TurretFactor.15"] = 0.7f;
         Scribe.Values["NewSightSystem_ShowSightRing.15"] = false;
         Scribe.Values["Caster_Enabled.15"] = false;
         Scribe.Values["Personalities_Enabled.15"] = false;
@@ -155,21 +155,21 @@ class Program {
         var fresh = new Settings();
         Check(!fresh.Debug && !fresh.Debug_LogJobs, "release defaults keep job logging off");
         Check(!fresh.NewSightSystem_Enabled && fresh.NewSightSystem_ShowSightRing, "new sight is opt-in with rings available");
-        var migrated = Load(42f, 0.7f, true, 0);
+        var migrated = Load(42f, true, 0);
         Check(!migrated.FinishedQuickSetup && migrated.QuickSetupRevisionCompleted == Settings.QuickSetupRequiredRevision, "old setup reopens once");
         CheckDiagnosticsReset(migrated);
-        Check(migrated.NewSightSystem_Enabled && migrated.NewSightSystem_BaseRadius == 42f && migrated.NewSightSystem_TurretFactor == 0.7f, "sight choices survive migration");
+        Check(migrated.NewSightSystem_Enabled && migrated.NewSightSystem_BaseRadius == 42f, "sight choices survive migration; retired turret factor key ignored");
         Check(!migrated.Caster_Enabled && !migrated.Personalities_Enabled && !migrated.NewSightSystem_ShowSightRing, "other preferences survive migration");
-        var current = Load(500f, 2f, true, Settings.QuickSetupRequiredRevision);
-        Check(current.NewSightSystem_BaseRadius == 60f && current.NewSightSystem_TurretFactor == 1f, "upper bounds clamp");
+        var current = Load(500f, true, Settings.QuickSetupRequiredRevision);
+        Check(current.NewSightSystem_BaseRadius == Settings.NewSightSystem_MaxBaseRadius, "upper bound clamps");
         Check(current.FinishedQuickSetup && current.AdvancedUser && current.Debug_DebugDumpData, "completed revision preserves advanced choices");
-        var disabled = Load(-10f, -5f, false, Settings.QuickSetupRequiredRevision);
-        Check(disabled.NewSightSystem_BaseRadius == 10f && disabled.NewSightSystem_TurretFactor == 0.1f, "lower bounds clamp");
+        var disabled = Load(-10f, false, Settings.QuickSetupRequiredRevision);
+        Check(disabled.NewSightSystem_BaseRadius == Settings.NewSightSystem_MinBaseRadius, "lower bound clamps");
         Check(!disabled.NewSightSystem_Enabled, "fog off disables shared sight");
         Scribe.mode = LoadSaveMode.Saving;
         Scribe.Values.Clear();
         current.ExposeData();
-        Check((bool)Scribe.Values["NewSightSystem_Enabled.15"] && (float)Scribe.Values["NewSightSystem_BaseRadius.15"] == 60f && (float)Scribe.Values["NewSightSystem_TurretFactor.15"] == 1f && !(bool)Scribe.Values["NewSightSystem_ShowSightRing.15"], "sight preferences serialize");
+        Check((bool)Scribe.Values["NewSightSystem_Enabled.15"] && (float)Scribe.Values["NewSightSystem_BaseRadius.15"] == 60f && !(bool)Scribe.Values["NewSightSystem_ShowSightRing.15"] && !Scribe.Values.ContainsKey("NewSightSystem_TurretFactor.15"), "sight preferences serialize");
         var applySettings = new Settings(); EnableDiagnostics(applySettings);
         Finder.Settings = applySettings;
         var rejected = new Window_QuickSetup(false);

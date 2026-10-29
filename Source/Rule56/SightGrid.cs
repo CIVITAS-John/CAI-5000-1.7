@@ -10,8 +10,7 @@ namespace CombatAI
 {
 	public class SightGrid
 	{
-		private const int NEW_SIGHT_RADIUS_REFRESH_TICKS = 45;
-		private const int SIGHT_GLOW_BUCKET_COUNT = 16;
+		private const int SIGHT_GLOW_BUCKET_COUNT = MapComponent_FogGrid.SIGHT_GLOW_BUCKET_COUNT;
 		private static readonly float[] sightGlowCoeffLut = BuildSightGlowCoeffLut();
 		private readonly AsyncActions               asyncActions;
 		private readonly IBuckets<IBucketableThing> buckets;
@@ -538,7 +537,7 @@ namespace CombatAI
 			bool unifiedSight = SightUtility.NewSightSystemActive;
 			int ticks = GenTicks.TicksGame;
 			if (!item.cachedSightRadius.IsValid || item.cachedSightRadius.usesNewSightSystem != unifiedSight
-				|| unifiedSight && ticks - item.cachedSightRadius.createdAt >= NEW_SIGHT_RADIUS_REFRESH_TICKS)
+				|| unifiedSight && ticks - item.cachedSightRadius.createdAt >= SightUtility.NEW_SIGHT_RADIUS_REFRESH_TICKS)
 			{
 				item.cachedSightRadius = SightUtility.GetSightRadius(item.thing);
 			}
@@ -621,11 +620,11 @@ namespace CombatAI
 			Vector3 drawPos = item.thing.DrawPos;
 			scanForEnemies &= !engagedInMelee;
 			ISightRadius sightRadius = item.cachedSightRadius;
-			// Resolve pawn stats and capture lighting on the main thread before queueing work.
-			float nightVisionReduction = unifiedSight ? SightUtility.GetNightVisionLutReduction(item.thing) : 0f;
+			// Capture lighting on the main thread before queueing work; night vision is cached with the sight radius.
+			float nightVisionReduction = sightRadius.nightVisionReduction;
 			var fogComp = map.GetComponent<MapComponent_FogGrid>();
 			byte[] glowBuckets = unifiedSight ? fogComp?.SightGlowBuckets : null;
-			byte sourceGlowBucket = fogComp != null ? fogComp.GetSightGlowBucket(pos, glowBuckets) : (byte)15;
+			byte sourceGlowBucket = fogComp != null ? fogComp.GetSightGlowBucket(pos, glowBuckets) : (byte)(SIGHT_GLOW_BUCKET_COUNT - 1);
 			Action action = () =>
 			{
 				if (destroyed) return;
@@ -749,7 +748,7 @@ namespace CombatAI
 			return coefficients;
 		}
 
-		private static float GetSightGlowCoefficient(byte source, byte target, float nightVisionReduction)
+		internal static float GetSightGlowCoefficient(byte source, byte target, float nightVisionReduction)
 		{
 			float coefficient = sightGlowCoeffLut[source * SIGHT_GLOW_BUCKET_COUNT + target];
 			return 1f - (1f - coefficient) * (1f - nightVisionReduction);
@@ -910,6 +909,10 @@ namespace CombatAI
 			/// </summary>
 			public int createdAt;
 			public bool usesNewSightSystem;
+			/// <summary>
+			///     Share of the darkness penalty removed by night vision. Unified sight only.
+			/// </summary>
+			public float nightVisionReduction;
 			/// <summary>
 			///     Whether this is a valid report.
 			/// </summary>

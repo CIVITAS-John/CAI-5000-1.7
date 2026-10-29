@@ -1169,7 +1169,7 @@ namespace CombatAI.R
         private static TaggedString _CombatAI_Quick_NewSight_Description = null;
         /// <summary> Keyed string. key=<c>CombatAI.Quick.NewSight.Description</c>. inner text:
         ///
-        /// <code>Hover a weapon gizmo to preview the green sight ring. In the new system, fog reveal radius is kept identical to actual sight radius.</code>
+        /// <code>Hover a weapon gizmo to preview the green sight ring. In the new system, fog reveal radius matches actual sight radius, and both shrink in darkness.</code>
         /// </summary>
         public static TaggedString CombatAI_Quick_NewSight_Description
         {
@@ -1246,7 +1246,7 @@ namespace CombatAI.R
         private static TaggedString _CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description = null;
         /// <summary> Keyed string. key=<c>CombatAI.Settings.Basic.FogOfWar.NewSight.ShowRing.Description</c>. inner text:
         ///
-        /// <code>When selecting a pawn or turret, draw the sight range ring together with the attack range ring.</code>
+        /// <code>While hovering the weapon gizmo of a pawn or turret, draw the sight range ring together with the attack range ring. The sight ring reflects the light where the pawn or turret stands.</code>
         /// </summary>
         public static TaggedString CombatAI_Settings_Basic_FogOfWar_NewSight_ShowRing_Description
         {

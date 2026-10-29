@@ -45,18 +45,12 @@ namespace CombatAI.Patches
                 return methods;
             }
 
-            public static bool Prefix(Verb __instance, ref bool __result, out bool __state, object[] __args)
+            public static void Prefix(Verb __instance, out bool __state)
             {
                 if (__state = __instance != callerVerb)
                 {
                     callerVerb = __instance;
                 }
-                if (ShouldBlockBySharedSightForVerb(__instance, __args))
-                {
-                    __result = false;
-                    return false;
-                }
-                return true;
             }
 
             public static void Postfix(Verb __instance, bool __result, bool __state)
@@ -75,6 +69,27 @@ namespace CombatAI.Patches
             }
         }
         
+        /// <summary>
+        /// Shared sight gate. Vanilla target finders, cast position finders and TryStartCastOn all ask
+        /// CanHitTargetFrom, so units move closer or pick another target instead of retrying a blocked cast.
+        /// </summary>
+        [HarmonyPatch(typeof(Verb), nameof(Verb.CanHitTargetFrom))]
+        internal static class Verb_CanHitTargetFrom_Patch
+        {
+            public static void Postfix(Verb __instance, IntVec3 root, LocalTargetInfo targ, ref bool __result)
+            {
+                if (!__result || !targ.IsValid || __instance is Verb_CastAbility)
+                {
+                    return;
+                }
+                IntVec3 cell = targ.HasThing && targ.Thing.Spawned ? targ.Thing.Position : targ.Cell;
+                if (IsOutsideSharedSight(__instance, root, cell))
+                {
+                    __result = false;
+                }
+            }
+        }
+
         [HarmonyPatch]
         private static class Verb_TryCastNextBurstShot_Patch
         {
@@ -141,17 +156,33 @@ namespace CombatAI.Patches
 			            MapComponent_FogGrid grid = map.GetComp_Fast<MapComponent_FogGrid>();
 			            if (grid != null)
 			            {
-				            grid.RevealShotSpot(verb.caster.Position, verb.verbProps.muzzleFlashScale);
+				            if (SightUtility.NewSightSystemActive)
+				            {
+					            grid.RevealShotSpot(verb.caster.Position, verb.verbProps.muzzleFlashScale);
+				            }
+				            else
+				            {
+					            grid.RevealSpot(verb.caster.Position, Maths.Min(verb.verbProps.muzzleFlashScale, 8f), Rand.Range(120, 360));
+				            }
 			            }
 		            }
 	            }
             }
         }
 
+        /// <summary>Gate for CE verbs, whose TryStartCastOn is patched separately in Mod_CE.</summary>
         internal static bool ShouldBlockBySharedSightForVerb(Verb verb, object[] args)
         {
-            Settings settings = Finder.Settings;
-            if (settings == null || !settings.FogOfWar_Enabled || !settings.NewSightSystem_Enabled)
+            return verb?.caster != null && TryGetTargetCell(verb, args, out IntVec3 cell) && IsOutsideSharedSight(verb, verb.caster.Position, cell);
+        }
+
+        /// <summary>
+        ///     Whether a ranged verb fired from <paramref name="root" /> would target a cell that neither the caster's team
+        ///     currently sees nor the caster could see itself from there.
+        /// </summary>
+        internal static bool IsOutsideSharedSight(Verb verb, IntVec3 root, IntVec3 cell)
+        {
+            if (!SightUtility.NewSightSystemActive)
             {
                 return false;
             }
@@ -160,21 +191,26 @@ namespace CombatAI.Patches
                 return false;
             }
             Map map = verb.caster.Map;
-            if (!SightUtility.SupportsMap(map) || !TryGetTargetCell(verb, args, out IntVec3 cell) || !cell.IsValid || !cell.InBounds(map))
+            if (!SightUtility.SupportsMap(map) || !root.IsValid || !cell.IsValid || !cell.InBounds(map))
             {
                 return false;
             }
             SightTracker tracker = map.GetComp_Fast<SightTracker>();
-            if (tracker == null)
+            if (tracker == null || SightUtility.CanSeeCell(verb.caster, root, cell))
             {
                 return false;
             }
+            // Pawns keep the reader SightTracker assigned at registration; other casters share their faction's.
+            SightTracker.SightReader reader = null;
             if (verb.caster is Pawn pawn)
             {
-                return pawn.TryGetSightReader(out SightTracker.SightReader reader) && reader != null && reader.GetDynamicFriendlyFlags(cell) == 0;
+                reader = pawn.AI()?.sightReader;
             }
-            Faction faction = verb.caster.Faction;
-            return faction != null && tracker.TryGetReader(faction, out SightTracker.SightReader factionReader) && factionReader != null && factionReader.GetDynamicFriendlyFlags(cell) == 0;
+            else
+            {
+                tracker.TryGetReader(verb.caster.Faction, out reader);
+            }
+            return reader != null && reader.GetDynamicFriendlyFlags(cell) == 0;
         }
 
         private static bool TryGetTargetCell(Verb verb, object[] args, out IntVec3 cell)

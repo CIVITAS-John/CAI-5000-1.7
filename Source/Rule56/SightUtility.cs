@@ -10,11 +10,13 @@ namespace CombatAI
     {
         private const float DOWNED_SIGHT_FACTOR = 0.35f;
         private const int DOWNED_MIN_SIGHT = 2;
+        private const float NEW_SIGHT_TURRET_FACTOR = 0.5f;
+        internal const int NEW_SIGHT_RADIUS_REFRESH_TICKS = 45;
         private static StatDef cachedNightVisionEfficiencyStat;
         private static StatDef cachedNightVisionEfficiencyApparelStat;
         private static bool nightVisionStatsResolved;
 
-        internal static bool NewSightSystemActive => Finder.Settings.FogOfWar_Enabled && Finder.Settings.NewSightSystem_Enabled;
+        internal static bool NewSightSystemActive => Finder.Settings != null && Finder.Settings.FogOfWar_Enabled && Finder.Settings.NewSightSystem_Enabled;
         /// <summary>Rectangular maps, including vehicle interiors, cannot use the square-grid fallback.</summary>
         internal static bool SupportsMap(Map map)
         {
@@ -23,15 +25,46 @@ namespace CombatAI
 
         public static float GetSightRadius_Fast(Thing thing)
         {
+            return GetSightRadius_Cached(thing).sight;
+        }
+
+        private static SightGrid.ISightRadius GetSightRadius_Cached(Thing thing)
+        {
             bool unifiedSight = NewSightSystemActive;
-            int expiry = unifiedSight ? 45 : 12000;
+            int expiry = unifiedSight ? NEW_SIGHT_RADIUS_REFRESH_TICKS : 12000;
             if (!TKVCache<Thing, SightGrid.ISightRadius, SightGrid.ISightRadius>.TryGet(thing, out SightGrid.ISightRadius radius, expiry)
                 || radius.usesNewSightSystem != unifiedSight)
             {
                 radius = GetSightRadius(thing);
                 TKVCache<Thing, SightGrid.ISightRadius, SightGrid.ISightRadius>.Put(thing, radius);
             }
-            return radius.sight;
+            return radius;
+        }
+
+        /// <summary>
+        ///     Whether <paramref name="thing" /> would see <paramref name="cell" /> from <paramref name="root" /> under the
+        ///     unified sight system. Line of sight is not checked.
+        /// </summary>
+        internal static bool CanSeeCell(Thing thing, IntVec3 root, IntVec3 cell)
+        {
+            float range = GetLitSightRadius(thing, root, cell);
+            return root.DistanceToSquared(cell) < range * range;
+        }
+
+        /// <summary>
+        ///     Unified sight radius from <paramref name="root" /> toward <paramref name="cell" />, scaled by the lighting
+        ///     at both ends like the sight grid.
+        /// </summary>
+        internal static float GetLitSightRadius(Thing thing, IntVec3 root, IntVec3 cell)
+        {
+            SightGrid.ISightRadius radius = GetSightRadius_Cached(thing);
+            MapComponent_FogGrid fogComp = thing.Map?.GetComp_Fast<MapComponent_FogGrid>();
+            if (fogComp == null)
+            {
+                return radius.sight;
+            }
+            byte[] glowBuckets = fogComp.SightGlowBuckets;
+            return radius.sight * SightGrid.GetSightGlowCoefficient(fogComp.GetSightGlowBucket(root, glowBuckets), fogComp.GetSightGlowBucket(cell, glowBuckets), radius.nightVisionReduction);
         }
 
 	    public static SightGrid.ISightRadius GetSightRadius(Thing thing)
@@ -96,6 +129,7 @@ namespace CombatAI
             }
             result.createdAt = GenTicks.TicksGame;
             result.usesNewSightSystem = unifiedSight;
+            result.nightVisionReduction = unifiedSight ? GetNightVisionLutReduction(thing) : 0f;
             return result;
         }
 
@@ -104,8 +138,7 @@ namespace CombatAI
             SightGrid.ISightRadius result = new SightGrid.ISightRadius();
             if (NewSightSystemActive)
             {
-                float baseRadius = Mathf.Clamp(Finder.Settings.NewSightSystem_BaseRadius, 10f, 60f);
-                float radius = Mathf.Max(GetFogRadius(pawn, baseRadius), GetMinimumSightRadiusForDefeatSensitiveMap(pawn));
+                float radius = Mathf.Max(GetFogRadius(pawn, Finder.Settings.NewSightSystem_BaseRadius), GetMinimumSightRadiusForDefeatSensitiveMap(pawn));
                 result.sight = Mathf.CeilToInt(Mathf.Max(radius, 3f));
                 result.scan = result.sight;
                 ApplyDownedSightPenalty(pawn, ref result);
@@ -115,7 +148,6 @@ namespace CombatAI
             {
                 result.sight = Mathf.FloorToInt(Mathf.Clamp(pawn.BodySize * 3f, 2f, 10f));
                 result.scan  = result.sight;
-                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             Verb verb = pawn.TryGetAttackVerb();
@@ -123,7 +155,6 @@ namespace CombatAI
             {
                 result.sight = 4;
                 result.scan  = 0;
-                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             if (pawn.RaceProps.Insect || pawn.RaceProps.IsMechanoid || pawn.RaceProps.Animal)
@@ -132,12 +163,10 @@ namespace CombatAI
                 {
                     result.sight = 10;
                     result.scan  = 0;
-                    ApplyDownedSightPenalty(pawn, ref result);
                     return result;
                 }
                 result.scan  = Mathf.CeilToInt(verb.EffectiveRange + 10f);
                 result.sight = Maths.Max((int)verb.EffectiveRange, 5);
-                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             if (verb.IsMeleeAttack)
@@ -153,7 +182,6 @@ namespace CombatAI
                     result.sight = 5;
                     result.scan  = 0;
                 }
-                ApplyDownedSightPenalty(pawn, ref result);
                 return result;
             }
             result.scan  = Mathf.CeilToInt(verb.EffectiveRange);
@@ -165,7 +193,6 @@ namespace CombatAI
                 skill = shooting.Level;
             }
             result.sight = Mathf.CeilToInt(Maths.Max(result.sight * Mathf.Clamp(skill / 7.5f, 0.778f, 1.425f), 4));
-            ApplyDownedSightPenalty(pawn, ref result);
             return result;
         }
 
@@ -174,9 +201,7 @@ namespace CombatAI
             SightGrid.ISightRadius result = new SightGrid.ISightRadius();
             if (NewSightSystemActive)
             {
-                float baseRadius = Mathf.Clamp(Finder.Settings.NewSightSystem_BaseRadius, 10f, 60f);
-                float turretFactor = Mathf.Clamp(Finder.Settings.NewSightSystem_TurretFactor, 0.1f, 1f);
-                result.sight = Mathf.CeilToInt(Mathf.Max(baseRadius * turretFactor, 3f));
+                result.sight = Mathf.CeilToInt(Mathf.Max(Finder.Settings.NewSightSystem_BaseRadius * NEW_SIGHT_TURRET_FACTOR, 3f));
                 result.scan = result.sight;
                 return result;
             }
@@ -210,7 +235,8 @@ namespace CombatAI
             }
             if (pawn != null)
             {
-                if (pawn.Downed)
+                // Unified mode also uses this radius as sight, so only legacy fog shrinks for pawns that just slept.
+                if (pawn.Downed || !NewSightSystemActive && GenTicks.TicksGame - CombatAI.Compatibility.NeedCompat.GetLastRestTick(pawn.needs?.rest) < 120)
                 {
                     return 3;
                 }
